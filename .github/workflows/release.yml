@@ -1,0 +1,56 @@
+# Pushing a tag vX.Y.Z builds, tests and packs tessera-code and publishes a GitHub Release with:
+#   tessera-code-X.Y.Z.tgz  the npm package (everything bundled, no dependencies to install)
+#   SHA256SUMS              checked by install.sh before installing
+#   install.sh              the installer of this version
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Check the tag matches package.json
+        run: |
+          pkg="v$(node -p 'require("./package.json").version')"
+          [ "$pkg" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME does not match package.json version $pkg"; exit 1; }
+
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+
+      - name: Pack
+        run: |
+          mkdir -p out
+          npm pack --pack-destination out
+          cp install.sh out/
+          cd out && sha256sum tessera-code-*.tgz install.sh > SHA256SUMS && cat SHA256SUMS
+
+      - name: Smoke test the package
+        run: |
+          npm install -g --prefix "$RUNNER_TEMP/p" out/tessera-code-*.tgz
+          "$RUNNER_TEMP/p/bin/tessera-code" -v
+
+      - name: Release notes from CHANGELOG.md
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          awk -v v="$ver" '/^## /{ if (on) exit; if (index($0, "## " v " ") == 1 || $0 == "## " v) { on = 1; next } } on' CHANGELOG.md > notes.md
+          printf '\n---\nInstall or update:\n\n```bash\ncurl -fsSL https://raw.githubusercontent.com/%s/main/install.sh | bash\n```\n' "$GITHUB_REPOSITORY" >> notes.md
+          cat notes.md
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" out/* --title "tessera-code ${GITHUB_REF_NAME#v}" --notes-file notes.md

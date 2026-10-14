@@ -1,0 +1,46 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "tessera: install dependencies",
+      "type": "shell",
+      "command": "npm install",
+      "problemMatcher": []
+    },
+    {
+      "label": "tessera: build",
+      "type": "shell",
+      "command": "npm run build",
+      "group": "build",
+      "problemMatcher": ["$tsc"]
+    },
+    {
+      "label": "tessera: install CLI globally (build + npm link)",
+      "detail": "Builds and registers the `tessera-code` command on PATH. Re-run after code changes only needs `tessera: build`.",
+      "type": "shell",
+      "command": "npm link && echo \"\\n✔ installed: $(command -v tessera-code)\"",
+      "dependsOn": ["tessera: build"],
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "tessera: uninstall CLI (npm unlink)",
+      "type": "shell",
+      "command": "npm unlink -g tessera-code && echo '✔ removed tessera-code from PATH'",
+      "problemMatcher": []
+    },
+    {
+      "label": "tessera: test",
+      "type": "shell",
+      "command": "npm test",
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "tessera: typecheck",
+      "type": "shell",
+      "command": "npm run typecheck",
+      "problemMatcher": ["$tsc"]
+    }
+  ]
+}
