@@ -15,9 +15,9 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -40,7 +40,8 @@ jobs:
 
       - name: Smoke test the package
         run: |
-          npm install -g --prefix "$RUNNER_TEMP/p" out/tessera-code-*.tgz
+          # ./ matters: npm reads "out/x.tgz" as a GitHub user/repo shorthand and tries a git clone.
+          npm install -g --prefix "$RUNNER_TEMP/p" ./out/tessera-code-*.tgz
           "$RUNNER_TEMP/p/bin/tessera-code" -v
 
       - name: Release notes from CHANGELOG.md
