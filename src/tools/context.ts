@@ -1,5 +1,6 @@
 import { isAbsolute, relative, resolve } from 'node:path';
 import type { PermissionManager } from '../permissions.js';
+import type { ImageInput } from '../agent/agent.js';
 
 export interface ToolContext {
   cwd: string;
@@ -10,6 +11,10 @@ export interface ToolContext {
   onDiff?: (path: string, diff: string) => void;
   /** Called right before a file tool modifies `abs` (undo snapshots). */
   beforeWrite?: (abs: string) => Promise<void>;
+  /** Shows images to the model with its next request (read of an image or a rendered document). */
+  showImages?: (label: string, images: ImageInput[]) => void;
+  /** Whether the current model can see images at all. */
+  canSeeImages?: () => boolean;
 }
 
 export function resolvePath(ctx: ToolContext, p: string): string {

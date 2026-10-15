@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.2 — 2026-10-15
+
+### Added
+- The agent looks at files as they are: `read` shows images (png, jpg, gif, webp) to the model, and renders
+  documents page by page as images — slides (pptx, ppt, key, odp), PDFs, Word (docx, doc, odt, rtf) and Excel
+  (xlsx, xls, ods) — so pictures, text drawn over pictures, charts and layout are seen instead of guessed from the
+  file's XML. Up to 10 pages per read (`pages: "11-20"` for more). Rendering uses LibreOffice when installed
+  (`brew install --cask libreoffice`); without it the agent says it is needed.
+
+### Fixed
+- The test suite no longer fails intermittently: each test file has its own temporary home folder.
+
 ## 0.3.1 — 2026-10-15
 
 ### Added

@@ -6,6 +6,7 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { createTwoFilesPatch } from 'diff';
 import { type ToolContext, resolvePath, displayPath } from './context.js';
+import { MAX_PAGES, fileKind, loadImage, parsePages, renderPages } from './render.js';
 
 const MAX_LINES = 2000;
 const MAX_LINE_LENGTH = 2000;
@@ -63,6 +64,24 @@ async function withFileLock<T>(abs: string, fn: () => Promise<T>): Promise<T> {
   }
 }
 
+/** Shows an image, or a document's pages rendered as images, to the model; returns the text result of the read. */
+async function readVisual(ctx: ToolContext, abs: string, kind: 'image' | 'document', pages: string | undefined, signal?: AbortSignal): Promise<string> {
+  const rel = displayPath(ctx, abs);
+  if (!ctx.showImages || ctx.canSeeImages?.() === false) {
+    throw new Error(`${rel} has to be looked at as an image, and the current model cannot see images. Ask the user to switch to a model that can (e.g. /model mimo-v2.6-flash).`);
+  }
+  if (kind === 'image') {
+    ctx.showImages(`Image ${rel}:`, [await loadImage(abs)]);
+    return `${rel} is shown to you as an image in the next message.`;
+  }
+  const r = await renderPages(abs, parsePages(pages), signal);
+  if (!r.images.length) return `${rel} has ${r.total} page${r.total === 1 ? '' : 's'}; there is nothing at ${pages}.`;
+  const span = r.first === r.last ? `page ${r.first}` : `pages ${r.first}-${r.last}`;
+  ctx.showImages(`${rel}, ${span} of ${r.total}, rendered as they look (in order):`, r.images);
+  const more = r.last < r.total ? ` Read pages "${r.last + 1}-${Math.min(r.total, r.last + MAX_PAGES)}" for the next ones.` : '';
+  return `Rendered ${rel}: ${span} of ${r.total}, shown to you as images in the next message.${more}`;
+}
+
 export function unifiedDiff(path: string, before: string, after: string): string {
   return createTwoFilesPatch(path, path, before, after, '', '', { context: 3 })
     .split('\n')
@@ -105,18 +124,24 @@ export function fileTools(ctx: ToolContext) {
   return {
     read: tool({
       description:
-        'Read a file from the local filesystem. Returns lines prefixed with line numbers (cat -n format). ' +
-        `Reads up to ${MAX_LINES} lines by default; use offset/limit for large files. Always read a file before editing it.`,
+        'Read a file from the local filesystem. Text files: lines prefixed with line numbers (cat -n format), up to ' +
+        `${MAX_LINES} lines by default; use offset/limit for large files. Always read a file before editing it. ` +
+        'Images (png, jpg, gif, webp) are shown to you as they are. Documents (pptx/ppt/key/odp slides, pdf, docx/doc/odt, ' +
+        `xlsx/xls/ods) are rendered page by page as images, exactly as they look — text drawn over pictures, charts and layout included — ` +
+        `up to ${MAX_PAGES} pages per call; use pages ("11-20") for more. Use this instead of unzipping office files or extracting their XML.`,
       inputSchema: z.object({
         path: z.string().describe('Absolute path or path relative to the working directory'),
-        offset: z.number().int().min(1).optional().describe('1-based line number to start from'),
-        limit: z.number().int().min(1).optional().describe('Number of lines to read'),
+        offset: z.number().int().min(1).optional().describe('Text files: 1-based line number to start from'),
+        limit: z.number().int().min(1).optional().describe('Text files: number of lines to read'),
+        pages: z.string().optional().describe(`Documents: page or slide range, e.g. "3" or "11-20" (at most ${MAX_PAGES}; default the first ${MAX_PAGES})`),
       }),
-      execute: async ({ path, offset = 1, limit = MAX_LINES }) => {
+      execute: async ({ path, offset = 1, limit = MAX_LINES, pages }, { abortSignal }) => {
         const abs = resolvePath(ctx, path);
         if (!existsSync(abs)) throw new Error(`File not found: ${path}`);
         const s = await stat(abs);
         if (s.isDirectory()) throw new Error(`${path} is a directory. Use the glob tool to list files.`);
+        const kind = fileKind(abs);
+        if (kind !== 'text') return readVisual(ctx, abs, kind, pages, abortSignal);
         const content = await readFile(abs, 'utf8');
         ctx.readFiles.set(abs, s.mtimeMs);
         if (content.length === 0) return '(file is empty)';

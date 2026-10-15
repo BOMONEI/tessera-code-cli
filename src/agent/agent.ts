@@ -173,6 +173,8 @@ export class Agent {
   private models = new Map<string, LanguageModelV4>();
   /** Messages sent during a turn, delivered before its next step. */
   private interjections: string[] = [];
+  /** Images tools asked to show (read of an image or document), sent with the next step's request. */
+  private toolImages: Array<{ label: string; images: ImageInput[] }> = [];
 
   constructor(private opts: AgentOptions) {
     this.messages = opts.messages ?? [];
@@ -257,6 +259,14 @@ export class Agent {
     return this.opts.apiKey;
   }
 
+  /**
+   * Shows images to the model: they go out as a user message right after the tool results of the current step.
+   * Tool results themselves carry only text, since OpenAI-compatible APIs do not reliably accept images there.
+   */
+  attachImages(label: string, images: ImageInput[]): void {
+    if (images.length) this.toolImages.push({ label, images });
+  }
+
   /** A new key (/auth): models created with the old one are dropped. */
   set apiKey(key: string) {
     this.opts.apiKey = key;
@@ -298,6 +308,7 @@ export class Agent {
   async *run(input: string | ModelMessage[], signal?: AbortSignal, images: ImageInput[] = []): AsyncGenerator<AgentEvent> {
     const startedAt = performance.now();
     let firstOutputAt: number | undefined;
+    this.toolImages = []; // anything left from an earlier turn (it ended before another step) is stale
     if (images.length && !this.model.images) {
       yield { type: 'error', message: `${this.model.id} cannot read images. Switch to a model that can (e.g. /model mimo-v2.6-flash) or remove the image.` };
       return;
@@ -388,18 +399,25 @@ export class Agent {
             notices.push({ type: 'error', message: `Auto-compaction failed: ${errorMessage(e)}` });
           }
         }
-        if (last && this.interjections.length) {
-          const texts = this.interjections.splice(0);
-          const text = `${INTERJECTION_PREFIX}\n${texts.join('\n\n')}`;
+        // One user message after the tool results: images the tools showed, then messages the user typed meanwhile.
+        const parts: Array<{ type: 'text'; text: string } | { type: 'file'; data: string; mediaType: string }> = [];
+        if (last) {
+          for (const { label, images } of this.toolImages.splice(0)) {
+            parts.push({ type: 'text', text: label }, ...images.map((i) => ({ type: 'file' as const, data: i.data, mediaType: i.mediaType })));
+          }
+        }
+        const texts = last ? this.interjections.splice(0) : [];
+        if (texts.length) parts.push({ type: 'text', text: `${INTERJECTION_PREFIX}\n${texts.join('\n\n')}` });
+        if (parts.length) {
           if (next) {
-            // Just compacted: the history ends with the "continue" user message; fold the interjection into it
-            // rather than sending two user messages in a row.
-            const merged: ModelMessage = { role: 'user', content: `${CONTINUE_AFTER_COMPACTION}\n\n${text}` };
+            // Just compacted: the history ends with the "continue" user message; fold these into it rather than
+            // sending two user messages in a row.
+            const merged: ModelMessage = { role: 'user', content: [{ type: 'text', text: CONTINUE_AFTER_COMPACTION }, ...parts] };
             next = [...next.slice(0, -1), merged];
             history = next;
             this.replaceHistory(history);
           } else {
-            const message: ModelMessage = { role: 'user', content: text };
+            const message: ModelMessage = { role: 'user', content: parts.length === 1 && parts[0]!.type === 'text' ? parts[0]!.text : parts };
             completed.push(message); // part of the turn's history, in order after the steps so far
             next = [...messages, message];
           }

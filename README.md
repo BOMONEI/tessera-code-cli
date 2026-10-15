@@ -138,6 +138,22 @@ Bare file names with an extension (`fix median.ts`) are attached too when they e
 or 2000 lines are attached partially and must be read before editing. Secrets (`.env*`, keys, credentials, tokens),
 paths outside the project and `.git`/`.tessera` are never attached. In `--repl` mode, Tab completes `@` mentions.
 
+## Images and documents
+
+The agent's `read` tool looks at files the way you see them:
+
+- **Images** (png, jpg, gif, webp) are shown to the model as images.
+- **Documents** are rendered page by page as images: slides (pptx, ppt, key, odp), PDFs, Word (docx, doc, odt, rtf) and
+  Excel (xlsx, xls, ods). Pictures, text drawn over pictures, charts and layout come through as they look, instead
+  of the model unzipping the file and guessing from its XML. Up to 10 pages per read; the model asks for more with a
+  range (`pages: "11-20"`). One page counts as about 1.5k tokens of context.
+
+Rendering uses [LibreOffice](https://www.libreoffice.org) (free), only when a document is read; install it once
+(`brew install --cask libreoffice`, or `apt install libreoffice-impress libreoffice-writer libreoffice-calc`), or point
+`TESSERA_SOFFICE` at its `soffice`. Each render runs headless with its own temporary LibreOffice profile, so it does
+not touch a LibreOffice window you have open. A model that cannot see images gets a message saying so (the default
+`mimo-v2.6-flash` can).
+
 ## Configuration
 
 The first run creates `~/.tessera-code/config.json` with the main defaults and an empty API key (an existing file is

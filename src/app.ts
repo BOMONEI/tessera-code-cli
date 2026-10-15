@@ -208,6 +208,9 @@ export async function createApp(opts: AppOptions): Promise<App> {
     },
     afterTurn: hooks.configured ? async () => void (await hooks.run('Stop', {})) : undefined,
   });
+  // read shows images and rendered documents (slides, PDF pages) to the model through the agent.
+  ctx.showImages = (label, images) => agent.attachImages(label, images);
+  ctx.canSeeImages = () => agent.model.images === true;
 
   const mcpReady = mcpConnecting
     .then((mcp) => {

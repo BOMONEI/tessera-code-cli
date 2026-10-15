@@ -1,6 +1,6 @@
 {
   "name": "tessera-code",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "CLI coding agent powered by OpenCode Go",
   "scripts": {
     "dev": "tsx --tsconfig tsconfig.json src/cli.ts",
