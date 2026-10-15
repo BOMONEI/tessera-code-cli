@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.1 — 2026-10-15
+
+### Added
+- `tessera-code update` installs the latest release; `tessera-code update --check` only says whether one is available.
+  It runs the new release's `install.sh` after checking it against that release's `SHA256SUMS`, so updates take the
+  same verified path as the first install. A source checkout (`npm link`) is told to update with git instead.
+  Coming from 0.3.0, run the curl installer once more; from then on `tessera-code update` does it.
+
 ## 0.3.0 — 2026-10-14
 
 ### Added

@@ -22,8 +22,10 @@ Then run `tessera-code` in a project folder and register your OpenCode Go API ke
 - Installs the latest [release](https://github.com/BOMONEI/tessera-code-cli/releases) with `npm install -g`, after
   checking its SHA-256 against the release's `SHA256SUMS`. If the global npm folder is not writable (system Node),
   it installs under `~/.local` and tells you how to add `~/.local/bin` to PATH, instead of asking for sudo.
-- A specific version: `curl -fsSL …/install.sh | TESSERA_VERSION=0.3.0 bash`. Update: run the installer again.
-  Remove: `npm uninstall -g tessera-code`.
+- Update: `tessera-code update` (`--check` only says whether one is available). It runs the new release's
+  `install.sh`, checked against that release's `SHA256SUMS`, so updates go through the same verified path. A source
+  checkout (`npm link`) is pointed at `git pull && npm ci && npm run build` instead of being replaced.
+- A specific version: `curl -fsSL …/install.sh | TESSERA_VERSION=0.3.0 bash`. Remove: `npm uninstall -g tessera-code`.
 
 ## Build from source
 

@@ -175,6 +175,15 @@ program
     stdout.write(`${check === 'ok' ? 'Verified and saved' : 'Saved (could not verify it now)'}: ${maskKey(key.trim())} → ~/.tessera-code/config.json\n`);
   });
 
+program
+  .command('update')
+  .description('update to the latest release (from GitHub Releases, checksum-verified)')
+  .option('--check', 'only say whether an update is available')
+  .action(async (opts: { check?: boolean }) => {
+    const { runUpdate } = await import('./update.js');
+    process.exitCode = await runUpdate(VERSION, { check: opts.check }, { write: (t) => stdout.write(t) });
+  });
+
 program.parseAsync().catch((e: Error) => {
   stderr.write(red(`✗ ${e.message}\n`));
   process.exit(1);
