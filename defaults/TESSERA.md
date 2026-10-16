@@ -17,3 +17,9 @@ These instructions apply to every project. Edit ~/.tessera-code/TESSERA.md to ch
 8. ERRORS: Handle errors where they can occur, with messages that say what went wrong and what to do. Do not silently swallow failures.
 
 9. DEPENDENCIES: Before adding a new library or tool, say why it is needed and what the alternatives are.
+
+10. FINAL INSPECTION: After completing any modification, perform a final inspection before reporting to the user. Confirm that:
+   - All requirements are fully satisfied.
+   - No edge cases have been overlooked.
+   - No side effects or unintended regressions have been introduced.
+   Only notify the user once this final inspection is complete.

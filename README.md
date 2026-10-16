@@ -221,6 +221,10 @@ Every install has the **exa** web search server (`https://mcp.exa.ai/mcp`, tools
 lacks it), and loaded even if the entry is deleted; set `"enabled": false` on it, globally or in a project's
 settings, to turn it off. Entries may use opencode's form (`"type": "remote" | "local"`, `"enabled"`).
 
+Servers connect in the background from startup, and each one's tools are usable as soon as it is connected. A
+prompt sent before they are all up waits at most 1.5 s; a server still connecting then (slow or unreachable ones can
+take up to their 15 s connect timeout) joins from the next prompt, and the turn says so.
+
 The bottom bar shows `mcp 2/3`: servers connected out of configured (yellow while starting, red when one failed); `/mcp`
 lists each server with its tools or error.
 

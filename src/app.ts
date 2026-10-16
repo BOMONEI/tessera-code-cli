@@ -15,7 +15,7 @@ import { runShell } from './tools/shell.js';
 import { truncate } from './tools/context.js';
 import { attachMentionedFiles } from './agent/attachments.js';
 import { HookRunner } from './hooks.js';
-import { connectMcp, type McpServerStatus } from './mcp.js';
+import { connectMcp, type McpConnection, type McpServerStatus } from './mcp.js';
 import type { ToolContext } from './tools/context.js';
 import { fileTools } from './tools/files.js';
 import { searchTools } from './tools/search.js';
@@ -78,6 +78,9 @@ export interface App {
   clear(): Promise<void>;
   close(): Promise<void>;
 }
+
+/** How long a turn waits for MCP servers that are still connecting (exa usually connects in ~0.6 s). */
+const MCP_TURN_WAIT_MS = 1500;
 
 export const NO_API_KEY = 'No OpenCode Go API key registered. Run /auth <key> (or: tessera-code auth <key>).';
 
@@ -142,7 +145,13 @@ export async function createApp(opts: AppOptions): Promise<App> {
   const config = await loadConfig(opts.cwd, { trusted });
   // MCP servers (npx-launched ones can take seconds) connect in the background; the first turn waits only if they
   // are still starting by then.
-  const mcpConnecting = connectMcp(config.mcpServers, opts.cwd);
+  // Each server's tools are usable as soon as it connects (the agent is created meanwhile; see applyMcp below).
+  let mcpLatest: Omit<McpConnection, 'close'> | undefined;
+  let applyMcp: ((m: Omit<McpConnection, 'close'>) => void) | undefined;
+  const mcpConnecting = connectMcp(config.mcpServers, opts.cwd, (partial) => {
+    mcpLatest = partial;
+    applyMcp?.(partial);
+  });
   let mcpStatus: McpServerStatus[] = Object.keys(config.mcpServers).map((name) => ({ name, ok: false, tools: [], error: 'connecting…' }));
   const catalog = await loadCatalog();
 
@@ -212,11 +221,13 @@ export async function createApp(opts: AppOptions): Promise<App> {
   ctx.showImages = (label, images) => agent.attachImages(label, images);
   ctx.canSeeImages = () => agent.model.images === true;
 
+  applyMcp = (m) => {
+    mcpStatus = m.status;
+    if (Object.keys(m.tools).length) agent.tools = guardTools({ ...buildTools(ctx), ...m.tools }, hooks, permissions, m.serverOf);
+  };
+  if (mcpLatest) applyMcp(mcpLatest);
   const mcpReady = mcpConnecting
-    .then((mcp) => {
-      mcpStatus = mcp.status;
-      if (Object.keys(mcp.tools).length) agent.tools = guardTools({ ...buildTools(ctx), ...mcp.tools }, hooks, permissions, mcp.serverOf);
-    })
+    .then((mcp) => applyMcp!(mcp))
     .catch((e: Error) => {
       mcpStatus = mcpStatus.map((s) => ({ ...s, error: e.message }));
     });
@@ -311,10 +322,19 @@ export async function createApp(opts: AppOptions): Promise<App> {
       const firstTurn = !agent.messages.length && !title;
       let started = false;
       try {
-        // MCP servers still starting: wait for them (their tools belong to this turn), but let esc interrupt.
+        // MCP servers still starting: wait a little for them (their tools belong to this turn), but never for a slow
+        // or dead one (its connect timeout is 15 s): the turn goes on with what is connected, the rest come next time.
         const waitStart = performance.now();
-        await Promise.race([mcpReady, new Promise<void>((resolve) => (signal?.aborted ? resolve() : signal?.addEventListener('abort', () => resolve(), { once: true })))]);
+        await Promise.race([
+          mcpReady,
+          new Promise<void>((resolve) => setTimeout(resolve, MCP_TURN_WAIT_MS).unref()),
+          new Promise<void>((resolve) => (signal?.aborted ? resolve() : signal?.addEventListener('abort', () => resolve(), { once: true }))),
+        ]);
         const waited = performance.now() - waitStart;
+        const pending = mcpStatus.filter((s) => s.error === 'connecting…').map((s) => s.name);
+        if (pending.length && !signal?.aborted) {
+          yield { type: 'info', text: `MCP still connecting (${pending.join(', ')}): its tools come with the next prompt.` };
+        }
         checkpoints.begin(prompt, agent.messages);
         for await (const ev of agent.run(prompt, signal, images)) {
           // A compaction before the turn replaces the history the checkpoint points to.

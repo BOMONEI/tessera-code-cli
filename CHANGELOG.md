@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.3 — 2026-10-16
+
+### Changed
+- Shorter answers: the agent leads with the answer and skips headings, tables, repeated summaries and extra code
+  variants unless asked (about 30% fewer characters and half the lines on typical questions).
+- A slow or unreachable MCP server no longer delays the first answer: a prompt waits at most 1.5 s, each server's
+  tools are usable as soon as it connects, and one still connecting joins from the next prompt.
+- The default instructions gain a final-inspection rule (requirements, edge cases, regressions checked before
+  reporting). Existing `~/.tessera-code/TESSERA.md` files are not changed.
+
 ## 0.3.2 — 2026-10-15
 
 ### Added
