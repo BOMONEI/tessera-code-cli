@@ -57,7 +57,7 @@ async function runPrint(app: App, input: string): Promise<void> {
 /** Asks whether to enable privileged project settings. Non-interactive runs never trust implicitly. */
 async function confirmTrust(summary: string, interactive: boolean): Promise<boolean> {
   if (!interactive) return false;
-  stderr.write(`\n${yellow('This project\'s .tessera/settings.json wants to enable:')}\n${summary.replace(/^/gm, '  ')}\n`);
+  stderr.write(`\n${yellow('This project (.tessera/settings.json, project skills) wants to enable:')}\n${summary.replace(/^/gm, '  ')}\n`);
   stderr.write(dim('These run commands on your machine. Only trust projects you know.\n'));
   const rl = createInterface({ input: process.stdin, output: stderr });
   const answer = await rl.question('Trust this project? [y/N] ');

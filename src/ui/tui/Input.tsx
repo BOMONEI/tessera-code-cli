@@ -78,7 +78,6 @@ export function Input({
   menuOpen,
   placeholder,
   realCursor,
-  ghost,
   transformPaste,
   onImagePaste,
   onCopy,
@@ -99,8 +98,6 @@ export function Input({
   realCursor?: boolean;
   /** Drawn instead of the value; must keep its length. */
   mask?: (value: string) => string;
-  /** Suggested continuation shown dimmed after the caret (accepted by the parent with → or tab). */
-  ghost?: string;
   /** Rewrites pasted text before it is inserted (e.g. dropped image paths become "[Image #1]"). */
   transformPaste?: (text: string) => string;
   /** ctrl+v arrived inside a burst of keys (the parent handles a lone ctrl+v itself). */
@@ -319,14 +316,12 @@ export function Input({
         return focus && !realCursor && i === cursorLine ? (
           <Text key={i} wrap="hard">
             {f.text.slice(0, f.at(col))}
-            <Text inverse>{l[col] ?? ghost?.[0] ?? ' '}</Text>
+            <Text inverse>{l[col] ?? ' '}</Text>
             {col < l.length ? f.text.slice(f.at(col) + 1) : ''}
-            {ghost && col >= l.length ? <Text dimColor>{ghost.slice(1)}</Text> : null}
           </Text>
         ) : (
           <Text key={i} wrap="hard">
-            {f.text || (ghost ? '' : ' ')}
-            {ghost && focus && i === cursorLine ? <Text dimColor>{ghost}</Text> : null}
+            {f.text || ' '}
           </Text>
         );
       })}

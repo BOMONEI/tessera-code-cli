@@ -23,7 +23,7 @@ export class Repl {
       // Tab completes /commands, their arguments, @files and earlier !commands (same rules as the TUI menu).
       completer: async (line: string): Promise<[string[], string]> => {
         try {
-          const commands = await loadCommands(app.ctx.cwd);
+          const commands = await loadCommands(app.ctx.cwd, await app.listSkills());
           const name = /^\/(\S+)\s/.exec(line)?.[1];
           const args = name ? ((await commands.find((c) => c.name === name)?.suggest?.(app)) ?? []) : [];
           const c = complete(line, line.length, { commands, args: () => args, files: (q) => suggestFiles(app.ctx.cwd, q, 20), history: [] });

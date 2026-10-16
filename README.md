@@ -86,7 +86,6 @@ TUI keys:
 | `ctrl+l` | clear the screen and redraw the conversation (if the terminal left stale frames behind) |
 | `/` | command menu with descriptions; after a command, its arguments (`/model`, `/mode`, `/think`, `/resume`, `/copy`). `enter` runs, `tab` completes |
 | `@` | file picker (↑↓, tab/enter to insert) |
-| `→` / `tab` | accept the dimmed suggestion from an earlier prompt |
 | `ctrl+v` | attach the clipboard image (screenshots); dragging image files into the terminal attaches them too |
 | typing while the agent works | the message is delivered after the current step and steers the running turn (`↳`); if the turn was already answering, it runs next. `/` and `!` lines wait for the turn |
 | `!command` | run a shell command directly; its output goes to the model with your next message (earlier `!` commands are suggested) |
@@ -112,6 +111,8 @@ Slash commands:
 | `/model` · `/models` · `/think` · `/mode` | model (ZDR only), reasoning, permission mode |
 | `/permissions` · `/cost` · `/mcp` · `/doctor` · `/init` · `/help` · `/exit` | allow rules, spend, MCP status, environment check, TESSERA.md |
 | `/auth [key]` | register the OpenCode Go API key (verified, saved to `~/.tessera-code/config.json`); without a key, show the one in use |
+| `/skills` · `/skill install\|new\|remove` · `/<skill> [task]` | list, add or run skills (see Skills) |
+| `/agents [single\|subagents\|multi]` | single agent, subagents or parallel subagents (saved to config.json) |
 | `/prompt [global\|project <text> \| remove g1]` | add your own instructions for every project or this project (see Configuration) |
 | `/command` | keyboard shortcuts and what the bottom bar shows (`path ⎇ branch · ctx ▕██░░▏ · 5h ▕█░░░▏` / `model · thinking level · mode · mcp connected/configured`) |
 
@@ -156,6 +157,40 @@ Rendering uses [LibreOffice](https://www.libreoffice.org) (free), only when a do
 `TESSERA_SOFFICE` at its `soffice`. Each render runs headless with its own temporary LibreOffice profile, so it does
 not touch a LibreOffice window you have open. A model that cannot see images gets a message saying so (the default
 `mimo-v2.6-flash` can).
+
+## Skills
+
+Skills are folders with a `SKILL.md` (front matter `name` and `description`, then instructions) plus any scripts or
+reference files — the same format as Claude Code, whose skills work here too. The agent sees one line per skill and
+loads a skill with its `skill` tool when a task fits; `/<name> [task]` runs one directly.
+
+| Where | |
+|---|---|
+| `.tessera/skills/<name>/` | this project (used once you trust the project) |
+| `~/.tessera-code/skills/<name>/` | every project |
+| `.claude/skills/<name>/` | this project's Claude skills (trusted projects) |
+| `~/.claude/skills/<name>/` | your Claude skills |
+
+On a name clash the first in this order wins. `/skills` lists them; `/skill install <git URL|folder> [global|project]`
+copies skills in (a folder with `SKILL.md`, or every `*/SKILL.md` / `skills/*/SKILL.md`; existing ones are not
+replaced); `/skill new <name> [global|project]` creates one to fill in; `/skill remove <name>`. A project's own skills
+are instructions from the repository, so like its hooks and MCP servers they are used only after you trust the project
+(asked again when they change).
+
+## Subagents and multi-agent
+
+Off by default: one agent does everything, which is fastest. `/agents` (or `"subagents"` / `"multiAgent"` in
+`config.json`) switches:
+
+| Mode | config | |
+|---|---|---|
+| `single` | both `false` | no delegation |
+| `subagents` | `"subagents": true` | the agent may hand a self-contained job to a subagent with its own context (`task` tool): `explore` reads only, `general` may edit and run commands under the same permissions; one at a time |
+| `multi` | `"multiAgent": true` | as above, with up to 4 subagents running in parallel for independent parts |
+
+The choice is saved and applies at once; the bottom bar shows `agents: sub` / `agents: multi`, and the spinner shows
+what a subagent is doing. Subagents cost extra requests (their spend counts toward the session and the 5h budget), so
+they pay off for broad research and independent work, not small edits.
 
 ## Configuration
 

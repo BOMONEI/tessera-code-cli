@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { ToolSet } from 'ai';
-import { THINKING_LEVELS, addProjectAllowRule, loadConfig, projectTrust, resolveApiKey, saveGlobalSetting, trustProject, type Config, type ThinkingLevel } from './config.js';
+import { HOME_DIR, THINKING_LEVELS, addProjectAllowRule, loadConfig, projectTrust, resolveApiKey, saveGlobalSetting, trustProject, type Config, type ThinkingLevel } from './config.js';
 import { loadCatalog, findModel, isZdr, type ModelInfo } from './providers/catalog.js';
 import { PermissionManager, type PermissionMode, type PromptFn } from './permissions.js';
 import { Agent } from './agent/agent.js';
@@ -13,6 +13,9 @@ import { generateTitle } from './agent/compact.js';
 import type { AgentEvent, ImageInput } from './agent/agent.js';
 import { runShell } from './tools/shell.js';
 import { truncate } from './tools/context.js';
+import { skillTools } from './tools/skill.js';
+import { SUBAGENT_ROLES, taskTool } from './tools/task.js';
+import { discoverSkills, type Skill } from './skills.js';
 import { attachMentionedFiles } from './agent/attachments.js';
 import { HookRunner } from './hooks.js';
 import { connectMcp, type McpConnection, type McpServerStatus } from './mcp.js';
@@ -50,8 +53,16 @@ export interface App {
   readonly apiKeySource: string;
   /** Uses a key registered with /auth from now on (the caller has stored it). */
   setApiKey(key: string, source: string): void;
-  /** Re-reads instruction files (TESSERA.md, /prompt) into the system prompt; applies from the next request. */
+  /** Re-reads instruction files (TESSERA.md, /prompt) and the skill list into the system prompt; applies from the next request. */
   reloadInstructions(): Promise<void>;
+  /** Skills usable here: the project's own (if trusted), global ones and Claude's (~/.claude/skills). */
+  listSkills(): Promise<Skill[]>;
+  /** single: no subagents; subagents: the task tool, one at a time; multi: several subagents in parallel. */
+  agentsMode(): AgentsMode;
+  /** Switches the mode now and saves it ("subagents" / "multiAgent" in config.json). */
+  setAgentsMode(mode: AgentsMode): Promise<void>;
+  /** Set by the UI: what a running subagent is doing. */
+  onTaskProgress?: (description: string, activity: string) => void;
   /** Switches the permission mode and makes it the default everywhere ("permissionMode" in config.json). */
   setPermissionMode(mode: PermissionMode): Promise<void>;
   mcpStatus: McpServerStatus[];
@@ -83,6 +94,10 @@ export interface App {
 
 /** How long a turn waits for MCP servers that are still connecting (exa usually connects in ~0.6 s). */
 const MCP_TURN_WAIT_MS = 1500;
+
+export type AgentsMode = 'single' | 'subagents' | 'multi';
+/** Subagents running at once in multi-agent mode. */
+const MULTI_AGENT_PARALLEL = 4;
 
 export const NO_API_KEY = 'No OpenCode Go API key registered. Run /auth <key> (or: tessera-code auth <key>).';
 
@@ -131,7 +146,7 @@ export function guardTools(tools: ToolSet, hooks: HookRunner, permissions: Permi
 }
 
 export function buildTools(ctx: ToolContext): ToolSet {
-  return { ...fileTools(ctx), ...searchTools(ctx), ...shellTools(ctx) };
+  return { ...fileTools(ctx), ...searchTools(ctx), ...shellTools(ctx), ...skillTools(ctx) };
 }
 
 export async function createApp(opts: AppOptions): Promise<App> {
@@ -187,8 +202,17 @@ export async function createApp(opts: AppOptions): Promise<App> {
     addProjectAllowRule(opts.cwd, rule),
   );
   const ctx: ToolContext = { cwd: opts.cwd, permissions, readFiles: new Map(), onDiff: opts.onDiff, beforeWrite: (abs) => checkpoints.beforeWrite(abs) };
+  // Skills are looked up when used, so ones installed or edited meanwhile are picked up; the project's own only when trusted.
+  const listSkills = (): Promise<Skill[]> => discoverSkills({ home: HOME_DIR, cwd: opts.cwd, projectTrusted: trusted }).catch(() => []);
+  ctx.skills = listSkills;
   const hooks = new HookRunner(config.hooks, opts.cwd, sessionId);
   const base = guardTools(buildTools(ctx), hooks, permissions);
+  // Subagents (task tool) when "subagents" or "multiAgent" is on; multi-agent lets up to 4 run at once.
+  const agentsOn = () => config.subagents || config.multiAgent;
+  const parallel = () => (config.multiAgent ? MULTI_AGENT_PARALLEL : 1);
+  const systemPrompt = async (modelId: string) => buildSystemPrompt(opts.cwd, modelId, await listSkills(), agentsOn() ? { parallel: parallel() } : undefined);
+  let mcpTools: ToolSet = {};
+  let mcpServerOf: Record<string, string> = {};
 
   const model = findModel(catalog, opts.model ?? config.model);
   if (!isZdr(model.id)) throw new NonZdrModelError(model.id);
@@ -199,7 +223,7 @@ export async function createApp(opts: AppOptions): Promise<App> {
     model,
     apiKey: auth.key,
     sessionId,
-    system: await buildSystemPrompt(opts.cwd, model.id),
+    system: await systemPrompt(model.id),
     tools: base,
     maxSteps: config.maxSteps,
     thinking: opts.thinking ?? config.thinking,
@@ -223,9 +247,26 @@ export async function createApp(opts: AppOptions): Promise<App> {
   ctx.showImages = (label, images) => agent.attachImages(label, images);
   ctx.canSeeImages = () => agent.model.images === true;
 
+  const task = taskTool({
+    apiKey: auth.key,
+    model: () => agent.model,
+    tools: () => agent.tools,
+    system: async (type) => `${await systemPrompt(agent.model.id)}\n\n# Your role\n${SUBAGENT_ROLES[type]}`.replace(/\n\n# Subagents[\s\S]*?(?=\n\n# )/, ''),
+    agentOptions: () => ({ maxSteps: config.maxSteps, thinking: agent.thinking, thinkingLevel: agent.thinkingLevel, contextLimit: config.contextLimit }),
+    parallel,
+    onProgress: (description, activity) => app.onTaskProgress?.(description, activity),
+    onUsage: (u) => agent.absorbUsage(u),
+  });
+  /** The agent's tools: built-ins, connected MCP servers, and the task tool when subagents are on. */
+  const rebuildTools = () => {
+    agent.tools = guardTools({ ...buildTools(ctx), ...mcpTools, ...(agentsOn() ? task : {}) }, hooks, permissions, mcpServerOf);
+  };
+  if (agentsOn()) rebuildTools();
   applyMcp = (m) => {
     mcpStatus = m.status;
-    if (Object.keys(m.tools).length) agent.tools = guardTools({ ...buildTools(ctx), ...m.tools }, hooks, permissions, m.serverOf);
+    mcpTools = m.tools;
+    mcpServerOf = m.serverOf;
+    if (Object.keys(m.tools).length || agentsOn()) rebuildTools();
   };
   if (mcpLatest) applyMcp(mcpLatest);
   const mcpReady = mcpConnecting
@@ -243,7 +284,7 @@ export async function createApp(opts: AppOptions): Promise<App> {
     if (!isZdr(id)) throw new NonZdrModelError(id);
     agent.model = findModel(catalog, id);
     agent.resetFallback();
-    agent.system = await buildSystemPrompt(opts.cwd, agent.model.id);
+    agent.system = await systemPrompt(agent.model.id);
   };
 
   /** Moves the app onto `next`, with its history; `state` restores per-session settings. */
@@ -278,7 +319,7 @@ export async function createApp(opts: AppOptions): Promise<App> {
 
   if (resumeId) await switchSession(resumeId, { model: !!opts.model, thinking: opts.thinking !== undefined, mode: opts.permissionMode !== undefined });
 
-  return {
+  const app: App = {
     agent,
     get store() {
       return store;
@@ -295,8 +336,18 @@ export async function createApp(opts: AppOptions): Promise<App> {
       return auth.source;
     },
     async reloadInstructions() {
-      agent.system = await buildSystemPrompt(opts.cwd, agent.model.id);
+      agent.system = await systemPrompt(agent.model.id);
     },
+    agentsMode: () => (config.multiAgent ? 'multi' : config.subagents ? 'subagents' : 'single'),
+    async setAgentsMode(mode) {
+      config.subagents = mode !== 'single';
+      config.multiAgent = mode === 'multi';
+      rebuildTools();
+      agent.system = await systemPrompt(agent.model.id);
+      await saveGlobalSetting('subagents', config.subagents);
+      await saveGlobalSetting('multiAgent', config.multiAgent);
+    },
+    listSkills,
     async setPermissionMode(mode) {
       permissions.mode = mode;
       config.permissionMode = mode;
@@ -419,4 +470,5 @@ export async function createApp(opts: AppOptions): Promise<App> {
       else void mcpConnecting.then((m) => m.close());
     },
   };
+  return app;
 }

@@ -151,13 +151,3 @@ export function applyCompletion(input: string, c: Completion, item: CompletionIt
   const text = item.value + (spaced ? ' ' : '');
   return { value: input.slice(0, c.start) + text + rest, cursor: c.start + text.length };
 }
-
-/**
- * Fish-style suggestion: the rest of the newest earlier single-line prompt that starts with what was typed. Only
- * for plain prompts with the cursor at the end.
- */
-export function ghostText(input: string, cursor: number, history: string[]): string | undefined {
-  if (input.length < 2 || cursor !== input.length || input.includes('\n') || /^[/!]/.test(input)) return undefined;
-  const hit = history.find((h) => h.length > input.length && h.startsWith(input) && !h.includes('\n'));
-  return hit?.slice(input.length);
-}

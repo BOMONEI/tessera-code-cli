@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyCompletion, complete, ghostText, rank, type CompletionSources } from '../src/ui/completion.js';
+import { applyCompletion, complete, rank, type CompletionSources } from '../src/ui/completion.js';
 
 const src: CompletionSources = {
   commands: [
@@ -52,12 +52,6 @@ describe('other completions', () => {
   it('!commands: earlier shell commands with the same prefix, never auto-run', () => {
     const c = complete('!git', 4, src)!;
     expect(c.items.map((i) => i.value)).toEqual(['!git status', '!git log --oneline']);
-  });
-  it('ghost text continues the newest matching prompt', () => {
-    expect(ghostText('fix', 3, src.history)).toBe(' the median bug');
-    expect(ghostText('fix', 2, src.history)).toBeUndefined(); // cursor not at the end
-    expect(ghostText('/he', 3, src.history)).toBeUndefined(); // the menu handles commands
-    expect(ghostText('zzz', 3, src.history)).toBeUndefined();
   });
   it('rank keeps the input order for equal scores', () => {
     expect(rank(['b-x', 'a-x'], 'x', (s) => s)).toEqual(['b-x', 'a-x']);

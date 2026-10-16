@@ -6,6 +6,8 @@ import { execFile } from 'node:child_process';
 import { HOME_DIR } from '../config.js';
 import { primeProjectFiles, projectFileList } from './attachments.js';
 
+import { skillsSection, type Skill } from '../skills.js';
+
 const INSTRUCTION_FILES = ['TESSERA.md', 'AGENTS.md', 'CLAUDE.md'];
 
 const BASE_PROMPT = `You are tessera-code, a fast and precise coding agent working in the user's repository through tools.
@@ -92,7 +94,18 @@ export async function loadProjectInstructions(cwd: string): Promise<Array<{ path
   return found.filter((f) => f.content);
 }
 
-export async function buildSystemPrompt(cwd: string, modelId: string): Promise<string> {
+/** The system prompt's delegation section when subagents are on; `parallel` > 1 is multi-agent. */
+export function agentsSection(parallel: number): string {
+  return [
+    '# Subagents',
+    'The task tool hands a self-contained job to a subagent with its own context window and returns its report. Use it for broad research that needs many file reads ("explore", read-only) or for independent multi-step work ("general"), so this conversation stays focused. The subagent cannot see this conversation: put everything it needs in the prompt. Do small tasks yourself; delegating costs a round trip.',
+    parallel > 1
+      ? `Several task calls in one response run in parallel (up to ${parallel} at a time): split independent work that way, then combine the reports.`
+      : 'Subagents run one at a time.',
+  ].join('\n');
+}
+
+export async function buildSystemPrompt(cwd: string, modelId: string, skills: Skill[] = [], agents?: { parallel: number }): Promise<string> {
   // git status, the file listing and instruction files are read concurrently.
   const [gitBlock, , instructions] = await Promise.all([gitInfo(cwd), primeProjectFiles(cwd), loadProjectInstructions(cwd)]);
   const env = [
@@ -110,5 +123,7 @@ export async function buildSystemPrompt(cwd: string, modelId: string): Promise<s
         .map((i) => `## ${i.path}\n${i.content}`)
         .join('\n\n')}`
     : '';
-  return `${BASE_PROMPT}\n\n${WORKING_RULES}\n\n# Environment\n${env}${fileBlock}${instructionBlock}`;
+  const skillBlock = skills.length ? `\n\n${skillsSection(skills)}` : '';
+  const agentsBlock = agents ? `\n\n${agentsSection(agents.parallel)}` : '';
+  return `${BASE_PROMPT}\n\n${WORKING_RULES}${skillBlock}${agentsBlock}\n\n# Environment\n${env}${fileBlock}${instructionBlock}`;
 }

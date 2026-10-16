@@ -77,7 +77,7 @@ describe('system prompt', () => {
 describe('/prompt', () => {
   function fakeApp(cwd = project()) {
     let reloads = 0;
-    const app = { ctx: { cwd }, reloadInstructions: async () => void reloads++ };
+    const app = { ctx: { cwd }, listSkills: async () => [], reloadInstructions: async () => void reloads++ };
     return { app: app as never, cwd, reloads: () => reloads };
   }
 

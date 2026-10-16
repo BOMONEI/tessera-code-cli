@@ -14,7 +14,7 @@ export const cyan = (s: string) => styleText('cyan', s);
 /** One-line summary of a tool call, e.g. `read(src/cli.ts)` or `bash(npm test)`. */
 export function toolLabel(name: string, input: unknown): string {
   const i = (input ?? {}) as Record<string, unknown>;
-  const arg = i.path ?? i.command ?? i.pattern ?? i.url ?? i.description ?? '';
+  const arg = i.path ?? i.command ?? i.pattern ?? i.url ?? i.description ?? i.name ?? '';
   const s = String(arg).replace(/\s+/g, ' ');
   return `${name}(${s.length > 80 ? s.slice(0, 79) + '…' : s})`;
 }

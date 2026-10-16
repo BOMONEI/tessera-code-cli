@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import type { HooksConfig } from './hooks.js';
+import { projectSkills } from './skills.js';
 import type { PermissionMode } from './permissions.js';
 
 export const HOME_DIR = process.env.TESSERA_HOME ?? join(homedir(), '.tessera-code');
@@ -38,6 +39,10 @@ export interface Config {
   notifyAfterSeconds: number;
   /** Check GitHub Releases (at most once a day) and say when a newer version is out. */
   updateCheck: boolean;
+  /** Let the agent delegate tasks to subagents (the task tool), one at a time. */
+  subagents: boolean;
+  /** Let several subagents run in parallel (implies subagents). Both false: a single agent only. */
+  multiAgent: boolean;
 }
 
 export interface FallbackConfig {
@@ -80,6 +85,8 @@ const DEFAULTS: Config = {
   permissionMode: 'default',
   notifyAfterSeconds: 20,
   updateCheck: true,
+  subagents: false,
+  multiAgent: false,
   fallback: { models: DEFAULT_FALLBACK, firstTokenTimeoutMs: 0, stickyMs: 5 * 60_000 },
 };
 
@@ -120,14 +127,20 @@ export interface ProjectTrust {
   hash: string;
 }
 
-/** Trust is keyed by project path and a hash of the privileged settings, so any change asks again. */
+/**
+ * Trust is keyed by project path and a hash of the privileged settings and the project's own skills
+ * (.tessera/skills, .claude/skills: instructions and scripts from the repository), so any change asks again.
+ */
 export async function projectTrust(cwd: string): Promise<ProjectTrust> {
   const project = await readJson(projectConfigPath(cwd));
-  const hash = hashOf(project);
-  if (!hasPrivileged(project)) return { needed: false, summary: '', hash };
+  const { skills, hash: skillsHash } = await projectSkills(cwd);
+  // Without skills the hash is the settings hash alone, as before, so earlier trust decisions still hold.
+  const hash = skills.length ? createHash('sha256').update(hashOf(project) + skillsHash).digest('hex') : hashOf(project);
+  if (!hasPrivileged(project) && !skills.length) return { needed: false, summary: '', hash };
   const trusted = await readJson(TRUST_FILE);
   if (trusted[cwd] === hash) return { needed: false, summary: '', hash };
   const lines: string[] = [];
+  for (const s of skills) lines.push(`skill "${s.name}" (${s.source === 'project' ? '.tessera' : '.claude'}/skills): ${s.description.replace(/\s+/g, ' ').slice(0, 100)}`);
   const mcp = (project.mcpServers ?? {}) as Record<string, McpServerConfig>;
   for (const [name, cfg] of Object.entries(mcp)) lines.push(`MCP server "${name}": ${'url' in cfg ? cfg.url : [cfg.command, ...(cfg.args ?? [])].join(' ')}`);
   for (const [event, hooks] of Object.entries((project.hooks ?? {}) as HooksConfig)) {
@@ -174,6 +187,9 @@ export async function loadConfig(cwd: string, opts: { trusted: boolean }): Promi
     [...new Set([...Object.keys(gh), ...Object.keys(ph)])].map((k) => [k, [...(gh[k as keyof HooksConfig] ?? []), ...(ph[k as keyof HooksConfig] ?? [])]]),
   );
   merged.permissionMode = parsePermissionMode(merged.permissionMode, '"permissionMode" in config');
+  for (const k of ['subagents', 'multiAgent'] as const) {
+    if (typeof merged[k] !== 'boolean') throw new Error(`Invalid "${k}" in config: use true or false (got ${JSON.stringify(merged[k])}).`);
+  }
   if (typeof merged.showThinking !== 'boolean') throw new Error(`Invalid "showThinking" in config: use true or false (got ${JSON.stringify(merged.showThinking)}).`);
   if (typeof merged.thinking !== 'boolean') throw new Error(`Invalid "thinking" in config: use true or false (got ${JSON.stringify(merged.thinking)}).`);
   if (!THINKING_LEVELS.includes(merged.thinkingLevel)) {

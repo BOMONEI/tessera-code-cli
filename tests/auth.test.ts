@@ -91,6 +91,7 @@ describe('/auth', () => {
     const state = { key, source: key ? 'somewhere' : '' };
     const app = {
       ctx: { cwd: mkdtempSync(join(tmpdir(), 'tessera-auth-cwd-')) }, // runCommand looks for custom commands here
+      listSkills: async () => [],
       agent: {
         get apiKey() {
           return state.key;

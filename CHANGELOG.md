@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.0 — 2026-10-16
+
+### Added
+- **Skills**: folders with a `SKILL.md` (the Claude Code format; `~/.claude/skills` is read too). The agent loads a
+  skill when a task fits, `/<name> [task]` runs one directly, `/skills` lists them and `/skill install|new|remove`
+  manages them. A project's own skills are used only once the project is trusted.
+- **Subagents and multi-agent**, off by default: `/agents subagents` lets the agent delegate self-contained tasks to
+  subagents (`explore` read-only or `general`), `/agents multi` runs up to 4 in parallel, `/agents single` turns it
+  off. Saved as `"subagents"` / `"multiAgent"` in `config.json`; the bottom bar shows the mode.
+
+### Removed
+- The dimmed suggestion from earlier prompts while typing (↑/↓ and ctrl+r still recall them).
+
 ## 0.3.4 — 2026-10-16
 
 ### Added

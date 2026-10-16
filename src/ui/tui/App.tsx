@@ -21,7 +21,7 @@ import type { ImageInput } from '../../agent/agent.js';
 import type { CompactProgress } from '../../agent/compact.js';
 import type { WhatsNew } from '../../changelog.js';
 import { Input, caretOf } from './Input.js';
-import { applyCompletion, complete, enterAction, ghostText, type CommandInfo, type CompletionItem } from '../completion.js';
+import { applyCompletion, complete, enterAction, type CommandInfo, type CompletionItem } from '../completion.js';
 import { VERSION } from '../../version.js';
 import { suggestFiles } from '../../agent/attachments.js';
 import { HistoryView, PermissionPrompt, Picker, middleEllipsis, type HistoryItem, type NewHistoryItem } from './components.js';
@@ -291,6 +291,7 @@ export function TuiApp({
   const [mcp, setMcp] = useState(() => mcpCounts(core.mcpStatus));
   /** A newer release, when there is one (checked in the background at most once a day). */
   const [update, setUpdate] = useState<string | undefined>();
+  const [agentsMode, setAgentsModeState] = useState(() => core.agentsMode());
   const [, forceRender] = useState(0);
   // Prompts typed in this directory, newest first (persisted across sessions).
   const historyRef = useRef<string[]>([]);
@@ -325,7 +326,6 @@ export function TuiApp({
   const menu = completion;
   const menuOpen = Boolean(menu);
   const selected = menu ? Math.min(menuIndex, menu.items.length - 1) : 0;
-  const ghost = !menu && !overlay ? ghostText(input, cursor, historyRef.current) : undefined;
   const acceptCompletion = (item: CompletionItem, run: boolean) => {
     if (!menu) return;
     const next = applyCompletion(input, menu, item);
@@ -344,7 +344,7 @@ export function TuiApp({
   useEffect(() => {
     if (!slashCommand || slashCommand in argCache) return;
     let live = true;
-    void loadCommands(core.ctx.cwd)
+    void core.listSkills().then((skills) => loadCommands(core.ctx.cwd, skills))
       .then((all) => all.find((c) => c.name === slashCommand)?.suggest?.(core) ?? [])
       .then((items) => live && setArgCache((c) => ({ ...c, [slashCommand]: items })))
       .catch(() => {});
@@ -405,6 +405,8 @@ export function TuiApp({
 
   useEffect(() => {
     // Compaction (auto or /compact) reports an estimated percentage; it replaces the spinner label meanwhile.
+    // A subagent's current step replaces the spinner label: "task(find usages) › read(src/app.ts)".
+    core.onTaskProgress = (description, activity) => setStatus(activity === 'done' ? 'Thinking' : `task(${description}) › ${activity}`);
     agent.onCompactProgress = (p) => setStatus(p.phase === 'done' ? (turnRef.current ? 'Thinking' : undefined) : compactLabel(p));
     bridge.ask = (req) => new Promise<Decision>((resolve) => setPending({ req, resolve }));
     bridge.onDiff = (path, diff) => pendingDiffs.current.push({ path, diff });
@@ -423,7 +425,7 @@ export function TuiApp({
           push({ kind: 'info', text: `↑ tessera-code ${latest} is available (you have ${VERSION}). Update: tessera-code update` });
         });
     }
-    void loadCommands(core.ctx.cwd).then((all) => setCommands(all.map(({ name, description, argHint }) => ({ name, description, argHint }))));
+    void core.listSkills().then((skills) => loadCommands(core.ctx.cwd, skills)).then((all) => setCommands(all.map(({ name, description, argHint }) => ({ name, description, argHint }))));
   }, [bridge, core.ctx.cwd]);
 
   // Streaming markdown: finished blocks are rendered and printed for good; only the block still being written
@@ -602,6 +604,7 @@ export function TuiApp({
     async (r: CommandResult): Promise<void> => {
       setMode(core.permissions.mode);
       setThinking(agent.thinking);
+      setAgentsModeState(core.agentsMode());
       forceRender((n) => n + 1);
       void core.saveState().catch(() => {});
       if (r.exit) return exit();
@@ -759,8 +762,6 @@ export function TuiApp({
         return acceptCompletion(item, action === 'complete-and-run' && !busy);
       }
       if (key.escape) return setMenuDismissed(typedKey);
-    } else if (ghost && (key.tab || (key.rightArrow && cursor === input.length))) {
-      return setInput(input + ghost);
     }
     if (key.escape && abortRef.current) {
       abortRef.current.abort();
@@ -937,7 +938,6 @@ export function TuiApp({
                 focus={!overlay}
                 menuOpen={menuOpen}
                 realCursor={Boolean(caret)}
-                ghost={ghost}
                 transformPaste={transformPaste}
                 onImagePaste={pasteImage}
                 width={inputBox.hasMeasured ? inputBox.width - innerLeft - 2 : size.columns - 6}
@@ -1013,6 +1013,7 @@ export function TuiApp({
                 </Text>
               </>
             ) : null}
+            {agentsMode !== 'single' ? <Text color="cyan">{` · agents: ${agentsMode === 'multi' ? 'multi' : 'sub'}`}</Text> : null}
             {update ? <Text color="yellow">{` · ↑ ${update} (tessera-code update)`}</Text> : null}
           </Text>
         </Box>

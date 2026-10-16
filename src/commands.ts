@@ -1,7 +1,7 @@
-import { readdir, readFile } from 'node:fs/promises';
+import { readdir, readFile, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import type { App } from './app.js';
+import type { App, AgentsMode } from './app.js';
 import { HOME_DIR, THINKING_LEVELS, type ThinkingLevel } from './config.js';
 import { GO_LIMITS, spendWindows } from './cost/ledger.js';
 import { isZdr } from './providers/catalog.js';
@@ -12,6 +12,8 @@ import type { ModelMessage } from 'ai';
 import { checkApiKey, maskKey, removeProjectAllowRule, saveApiKey, userProjectAllow } from './config.js';
 import { apiFetch } from './providers/net.js';
 import { addPrompt, listPrompts, promptFile, removePrompt, type PromptScope } from './prompts.js';
+import { createSkill, installSkills, skillPrompt, skillTarget, type Skill } from './skills.js';
+import { projectTrust, trustProject } from './config.js';
 import { copyTargets, copyToClipboard } from './ui/clipboard.js';
 import { formatChecks, runDoctor } from './doctor.js';
 import type { RewindMode } from './session/checkpoints.js';
@@ -144,7 +146,7 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
     name: 'help',
     description: 'list commands',
     async run(app) {
-      const all = await loadCommands(app.ctx.cwd);
+      const all = await loadCommands(app.ctx.cwd, await app.listSkills());
       return { output: all.map((c) => `/${(c.name + (c.argHint ? ` ${c.argHint}` : '')).padEnd(22)} ${c.description}`).join('\n') };
     },
   },
@@ -222,6 +224,95 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
           select: (i) => add(i === 0 ? 'global' : 'project', text),
         },
       };
+    },
+  },
+  {
+    name: 'agents',
+    description: 'single agent, subagents, or multi-agent (parallel subagents); saved to config.json',
+    argHint: '[single|subagents|multi]',
+    async run(app, arg) {
+      const modes: Record<AgentsMode, string> = {
+        single: 'single agent only (fastest; no delegation)',
+        subagents: 'subagents: the agent may delegate tasks, one at a time',
+        multi: 'multi-agent: several subagents run in parallel (up to 4)',
+      };
+      const set = async (mode: AgentsMode): Promise<CommandResult> => {
+        await app.setAgentsMode(mode);
+        return { output: `Agents: ${modes[mode]}. Saved to ~/.tessera-code/config.json (subagents: ${mode !== 'single'}, multiAgent: ${mode === 'multi'}).` };
+      };
+      const wanted = arg.trim().toLowerCase();
+      if (wanted === 'single' || wanted === 'subagents' || wanted === 'multi') return set(wanted);
+      if (wanted) return { output: 'Usage: /agents [single|subagents|multi]' };
+      const order: AgentsMode[] = ['single', 'subagents', 'multi'];
+      const current = app.agentsMode();
+      return {
+        choose: {
+          title: 'Agents',
+          options: order.map((m) => ({ label: `${m === current ? '● ' : '  '}${m}`, hint: modes[m] })),
+          select: (i) => set(order[i]!),
+        },
+      };
+    },
+    async suggest(app) {
+      const current = app.agentsMode();
+      return [
+        { value: 'single', hint: `${current === 'single' ? 'current · ' : ''}one agent, no delegation` },
+        { value: 'subagents', hint: `${current === 'subagents' ? 'current · ' : ''}delegate tasks, one at a time` },
+        { value: 'multi', hint: `${current === 'multi' ? 'current · ' : ''}parallel subagents (up to 4)` },
+      ];
+    },
+  },
+  {
+    name: 'skills',
+    description: 'list skills (yours, the project\'s and Claude\'s ~/.claude/skills)',
+    async run(app) {
+      const skills = await app.listSkills();
+      if (!skills.length) return { output: 'No skills yet. Add one: /skill install <git URL or folder> · /skill new <name>' };
+      const where: Record<Skill['source'], string> = { project: '.tessera/skills', global: '~/.tessera-code/skills', 'claude-project': '.claude/skills', claude: '~/.claude/skills' };
+      return {
+        output: [
+          ...skills.map((s) => `/${s.name.padEnd(24)} ${(s.description || '(no description)').replace(/\s+/g, ' ').slice(0, 90)}  · ${where[s.source]}`),
+          '',
+          'The agent picks one when a task fits; /<name> [task] runs it directly. Manage: /skill install|new|remove',
+        ].join('\n'),
+      };
+    },
+  },
+  {
+    name: 'skill',
+    description: 'manage skills: install <git URL|folder> [global|project] · new <name> [global|project] · remove <name>',
+    argHint: 'install|new|remove …',
+    async run(app, arg) {
+      const [sub = '', target = '', scopeArg = 'global'] = arg.trim().split(/\s+/);
+      const scope = scopeArg === 'project' ? 'project' : 'global';
+      const roots = { home: HOME_DIR, cwd: app.ctx.cwd };
+      const dir = skillTarget(scope, roots);
+      const shown = scope === 'global' ? '~/.tessera-code/skills' : '.tessera/skills';
+      // A skill the user adds to the project themselves is trusted along with the project (if it was trusted already),
+      // so the next start does not ask about it.
+      const done = async (output: string): Promise<CommandResult> => {
+        if (scope === 'project' && app.projectTrusted) await trustProject(app.ctx.cwd, (await projectTrust(app.ctx.cwd)).hash);
+        await app.reloadInstructions();
+        return { output };
+      };
+      if (sub === 'install' && target) {
+        const r = await installSkills(target, dir);
+        const parts = [r.installed.length ? `Installed ${r.installed.map((n) => `/${n}`).join(', ')} into ${shown}.` : 'Nothing new installed.'];
+        if (r.skipped.length) parts.push(`Already there (not replaced): ${r.skipped.join(', ')} — /skill remove <name> first to reinstall.`);
+        return done(parts.join(' '));
+      }
+      if (sub === 'new' && target) return done(`Created ${await createSkill(target, dir)} — edit its description and instructions.`);
+      if (sub === 'remove' && target) {
+        const skill = (await app.listSkills()).find((s) => s.name === target.toLowerCase());
+        if (!skill) return { output: `No skill "${target}". See /skills.` };
+        if (skill.source !== 'global' && skill.source !== 'project') return { output: `${skill.name} belongs to Claude (${skill.dir}); remove it there.` };
+        await rm(skill.dir, { recursive: true, force: true });
+        const removedScope = skill.source;
+        if (removedScope === 'project' && app.projectTrusted) await trustProject(app.ctx.cwd, (await projectTrust(app.ctx.cwd)).hash);
+        await app.reloadInstructions();
+        return { output: `Removed /${skill.name} (${skill.dir}).` };
+      }
+      return { output: 'Usage: /skill install <git URL|folder> [global|project] · /skill new <name> [global|project] · /skill remove <name>' };
     },
   },
   {
@@ -590,8 +681,23 @@ function parseCommandFile(name: string, raw: string): SlashCommand {
   };
 }
 
-/** Built-ins plus markdown commands from ~/.tessera-code/commands and .tessera/commands (project wins). */
-export async function loadCommands(cwd: string): Promise<SlashCommand[]> {
+/** Runs a skill directly: its instructions (and the arguments) become the prompt. */
+function skillCommand(skill: Skill): SlashCommand {
+  return {
+    name: skill.name,
+    description: `skill: ${(skill.description || skill.source).replace(/\s+/g, ' ').slice(0, 80)}`,
+    argHint: '[task]',
+    async run(_app, arg) {
+      return { prompt: `${await skillPrompt(skill, arg)}\n\nUse the skill above${arg ? ' for the arguments given' : ''}.` };
+    },
+  };
+}
+
+/**
+ * Built-ins, then markdown commands from ~/.tessera-code/commands and .tessera/commands (project wins), then skills
+ * as /<name>. Built-ins are never shadowed; a command beats a skill of the same name.
+ */
+export async function loadCommands(cwd: string, skills: Skill[] = []): Promise<SlashCommand[]> {
   const byName = new Map(BUILTIN_COMMANDS.map((c) => [c.name, c]));
   for (const dir of [join(HOME_DIR, 'commands'), join(cwd, '.tessera', 'commands')]) {
     if (!existsSync(dir)) continue;
@@ -602,12 +708,13 @@ export async function loadCommands(cwd: string): Promise<SlashCommand[]> {
       byName.set(name, parseCommandFile(name, await readFile(join(dir, f), 'utf8')));
     }
   }
+  for (const skill of skills) if (!byName.has(skill.name)) byName.set(skill.name, skillCommand(skill));
   return [...byName.values()];
 }
 
 export async function runCommand(app: App, line: string): Promise<CommandResult> {
   const [name = '', ...rest] = line.slice(1).split(/\s+/);
-  const cmd = (await loadCommands(app.ctx.cwd)).find((c) => c.name === name);
+  const cmd = (await loadCommands(app.ctx.cwd, await app.listSkills())).find((c) => c.name === name);
   if (!cmd) return { output: `Unknown command /${name}. Try /help.` };
   return cmd.run(app, rest.join(' ').trim());
 }

@@ -267,6 +267,11 @@ export class Agent {
     if (images.length) this.toolImages.push({ label, images });
   }
 
+  /** Adds usage spent elsewhere for this session (subagents) to its totals; their spend is already recorded. */
+  absorbUsage(u: Usage): void {
+    this.addUsage(this.total, u);
+  }
+
   /** A new key (/auth): models created with the old one are dropped. */
   set apiKey(key: string) {
     this.opts.apiKey = key;

@@ -65,7 +65,7 @@ describe('permission mode changes are global', () => {
 
   it('/mode goes through setPermissionMode, which saves it', async () => {
     const calls: string[] = [];
-    const app = { ctx: { cwd: project() }, permissions: { mode: 'default' }, setPermissionMode: async (m: string) => void calls.push(m) };
+    const app = { ctx: { cwd: project() }, listSkills: async () => [], permissions: { mode: 'default' }, setPermissionMode: async (m: string) => void calls.push(m) };
     const r = await runCommand(app as never, '/mode edit');
     expect(calls).toEqual(['acceptEdits']);
     expect(r.output).toMatch(/saved to ~\/\.tessera-code\/config\.json/);

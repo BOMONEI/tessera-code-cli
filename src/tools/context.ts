@@ -1,6 +1,7 @@
 import { isAbsolute, relative, resolve } from 'node:path';
 import type { PermissionManager } from '../permissions.js';
 import type { ImageInput } from '../agent/agent.js';
+import type { Skill } from '../skills.js';
 
 export interface ToolContext {
   cwd: string;
@@ -15,6 +16,8 @@ export interface ToolContext {
   showImages?: (label: string, images: ImageInput[]) => void;
   /** Whether the current model can see images at all. */
   canSeeImages?: () => boolean;
+  /** Skills usable in this session (global, Claude's, and the project's own when it is trusted). */
+  skills?: () => Promise<Skill[]>;
 }
 
 export function resolvePath(ctx: ToolContext, p: string): string {
