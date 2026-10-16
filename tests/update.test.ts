@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { UPDATE_CHECK_INTERVAL_MS, availableUpdate, expectedSha256, isSourceCheckout, latestVersion, runUpdate } from '../src/update.js';
+import { availableUpdate, expectedSha256, isSourceCheckout, latestVersion, runUpdate } from '../src/update.js';
 
 const SCRIPT = '#!/usr/bin/env bash\necho installing\n';
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -114,26 +114,22 @@ describe('helpers', () => {
 });
 
 describe('update notice', () => {
-  it('reports a newer release, asks GitHub at most once a day, and stays quiet otherwise', async () => {
-    const day0 = 1_000_000;
-    const gh = github('0.3.4');
-    expect(await availableUpdate('0.3.3', { fetch: gh.fetchFn, now: day0 })).toBe('0.3.4');
-    expect(gh.requested).toHaveLength(1);
-    // Within the day: the cached answer, no request.
-    expect(await availableUpdate('0.3.3', { fetch: gh.fetchFn, now: day0 + 60_000 })).toBe('0.3.4');
-    expect(gh.requested).toHaveLength(1);
-    // Up to date (or newer, e.g. a source checkout ahead of the release): nothing to say.
-    expect(await availableUpdate('0.3.4', { fetch: gh.fetchFn, now: day0 + 60_000 })).toBeUndefined();
-    expect(await availableUpdate('0.4.0', { fetch: gh.fetchFn, now: day0 + 60_000 })).toBeUndefined();
-    // A day later GitHub is asked again.
-    const later = github('0.3.5');
-    expect(await availableUpdate('0.3.3', { fetch: later.fetchFn, now: day0 + UPDATE_CHECK_INTERVAL_MS })).toBe('0.3.5');
-    expect(later.requested).toHaveLength(1);
+  it('asks at every start, so a release made since the last start shows up right away', async () => {
+    const before = github('0.3.4');
+    expect(await availableUpdate('0.3.4', { fetch: before.fetchFn })).toBeUndefined();
+    const after = github('0.4.0'); // released a minute later
+    expect(await availableUpdate('0.3.4', { fetch: after.fetchFn })).toBe('0.4.0');
+    expect(after.requested).toHaveLength(1);
+    // Up to date, or ahead (a source checkout): nothing to say.
+    expect(await availableUpdate('0.4.0', { fetch: after.fetchFn })).toBeUndefined();
+    expect(await availableUpdate('0.5.0', { fetch: after.fetchFn })).toBeUndefined();
   });
 
-  it('never throws (offline, no release)', async () => {
+  it('offline: falls back to the last answer; never throws', async () => {
     const offline = (async () => Promise.reject(new Error('offline'))) as unknown as typeof fetch;
-    expect(await availableUpdate('0.3.3', { fetch: offline, now: 9e15 })).toBeUndefined();
-    expect(await availableUpdate('0.3.3', { fetch: github(undefined).fetchFn, now: 9e15 + 1 })).toBeUndefined();
+    await availableUpdate('0.3.4', { fetch: github('0.4.0').fetchFn });
+    expect(await availableUpdate('0.3.4', { fetch: offline })).toBe('0.4.0');
+    expect(await availableUpdate('0.4.0', { fetch: offline })).toBeUndefined();
+    expect(await availableUpdate('0.3.4', { fetch: github(undefined).fetchFn })).toBe('0.4.0');
   });
 });

@@ -21,27 +21,21 @@ export async function latestVersion(fetchFn: typeof fetch = fetch): Promise<stri
   return tag.slice(1);
 }
 
-/** How often the TUI asks GitHub for the latest release. */
-export const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
-
 /**
- * The latest release when it is newer than `current`, else undefined. GitHub is asked at most once per
- * UPDATE_CHECK_INTERVAL_MS (the answer is kept in state.json), so starting the app stays offline most of the time.
+ * The latest release when it is newer than `current`, else undefined. Asked at every start, in the background (one
+ * HEAD request, no API rate limit), so a release shows up at the next start. A day-long cache made the notice lag a
+ * new release by up to 24 h. The last answer is kept in state.json and used only when GitHub cannot be reached.
  * Never throws: an update notice is not worth an error.
  */
 export async function availableUpdate(current: string, opts: { fetch?: typeof fetch; now?: number } = {}): Promise<string | undefined> {
+  let latest: string | undefined;
   try {
-    const now = opts.now ?? Date.now();
-    const cached = (await readState()).updateCheck as { at?: number; latest?: string } | undefined;
-    let latest = cached?.latest;
-    if (!cached?.at || !latest || now - cached.at >= UPDATE_CHECK_INTERVAL_MS || now < cached.at) {
-      latest = await latestVersion(opts.fetch ?? fetch);
-      await updateState({ updateCheck: { at: now, latest } });
-    }
-    return compareVersions(latest, current) > 0 ? latest : undefined;
+    latest = await latestVersion(opts.fetch ?? fetch);
+    await updateState({ updateCheck: { at: opts.now ?? Date.now(), latest } }).catch(() => {});
   } catch {
-    return undefined;
+    latest = ((await readState().catch(() => ({}))) as { updateCheck?: { latest?: string } }).updateCheck?.latest;
   }
+  return latest && compareVersions(latest, current) > 0 ? latest : undefined;
 }
 
 /** The folder holding package.json, from src/ (dev) or dist/bundle/ (built). */

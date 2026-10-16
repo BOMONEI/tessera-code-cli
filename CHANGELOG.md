@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.1 — 2026-10-16
+
+### Fixed
+- The new-version notice could lag a release by up to a day (the check was cached for 24 h). It now checks at every
+  start, in the background, so a new release shows up at the next start.
+
 ## 0.4.0 — 2026-10-16
 
 ### Added
