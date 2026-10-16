@@ -11,6 +11,7 @@ import { formatTokens, formatUsage } from './ui/format.js';
 import type { ModelMessage } from 'ai';
 import { checkApiKey, maskKey, removeProjectAllowRule, saveApiKey, userProjectAllow } from './config.js';
 import { apiFetch } from './providers/net.js';
+import { addPrompt, listPrompts, promptFile, removePrompt, type PromptScope } from './prompts.js';
 import { copyTargets, copyToClipboard } from './ui/clipboard.js';
 import { formatChecks, runDoctor } from './doctor.js';
 import type { RewindMode } from './session/checkpoints.js';
@@ -171,6 +172,55 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
           check === 'ok'
             ? `✓ API key ${maskKey(key)} verified and saved to ~/.tessera-code/config.json${env}.`
             : `API key ${maskKey(key)} saved to ~/.tessera-code/config.json, but it could not be verified now (network?)${env}.`,
+      };
+    },
+  },
+  {
+    name: 'prompt',
+    description: 'add your own instructions: global (every project) or for this project',
+    argHint: '[global|project <text> | remove g1|p1]',
+    async run(app, arg) {
+      const text = arg.trim();
+      const files = { global: promptFile('global', app.ctx.cwd), project: promptFile('project', app.ctx.cwd) };
+      const where = (scope: PromptScope) => (scope === 'global' ? '~/.tessera-code/TESSERA.md' : '.tessera/TESSERA.md');
+      const add = async (scope: PromptScope, prompt: string): Promise<CommandResult> => {
+        const n = await addPrompt(files[scope], prompt);
+        await app.reloadInstructions();
+        return { output: `Added to ${where(scope)} as ${scope[0]}${n} (${scope === 'global' ? 'every project' : 'this project'}). Applies from the next message.` };
+      };
+      if (!text) {
+        const [g, p] = await Promise.all([listPrompts(files.global), listPrompts(files.project)]);
+        const list = (items: string[], key: string) => (items.length ? items.map((t, i) => `  ${key}${i + 1}. ${t.replace(/\n/g, '\n      ')}`).join('\n') : '  (none)');
+        return {
+          output: [
+            `Global — every project (${where('global')}):`,
+            list(g, 'g'),
+            `Project — this project only (${where('project')}):`,
+            list(p, 'p'),
+            '',
+            'Add: /prompt global <text> · /prompt project <text> · remove: /prompt remove g1',
+          ].join('\n'),
+        };
+      }
+      const scoped = /^(global|project)\s+([\s\S]+)$/i.exec(text);
+      if (scoped) return add(scoped[1]!.toLowerCase() as PromptScope, scoped[2]!);
+      const removal = /^(?:remove|rm|delete)\s+([gp])(\d+)$/i.exec(text);
+      if (removal) {
+        const scope: PromptScope = removal[1]!.toLowerCase() === 'g' ? 'global' : 'project';
+        const removed = await removePrompt(files[scope], Number(removal[2]));
+        await app.reloadInstructions();
+        return { output: `Removed from ${where(scope)}: ${removed.split('\n')[0]}` };
+      }
+      if (/^(global|project|remove|rm|delete)$/i.test(text)) return { output: 'Usage: /prompt global <text> · /prompt project <text> · /prompt remove g1' };
+      return {
+        choose: {
+          title: 'Save this prompt for',
+          options: [
+            { label: 'Every project (global)', hint: where('global') },
+            { label: 'This project only', hint: `${where('project')} in ${app.ctx.cwd}` },
+          ],
+          select: (i) => add(i === 0 ? 'global' : 'project', text),
+        },
       };
     },
   },

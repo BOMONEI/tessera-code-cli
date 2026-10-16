@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { expectedSha256, isSourceCheckout, latestVersion, runUpdate } from '../src/update.js';
+import { UPDATE_CHECK_INTERVAL_MS, availableUpdate, expectedSha256, isSourceCheckout, latestVersion, runUpdate } from '../src/update.js';
 
 const SCRIPT = '#!/usr/bin/env bash\necho installing\n';
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -110,5 +110,30 @@ describe('helpers', () => {
     mkdirSync(join(pkg, 'src'));
     writeFileSync(join(pkg, 'src', 'cli.ts'), '');
     expect(isSourceCheckout(pkg)).toBe(true);
+  });
+});
+
+describe('update notice', () => {
+  it('reports a newer release, asks GitHub at most once a day, and stays quiet otherwise', async () => {
+    const day0 = 1_000_000;
+    const gh = github('0.3.4');
+    expect(await availableUpdate('0.3.3', { fetch: gh.fetchFn, now: day0 })).toBe('0.3.4');
+    expect(gh.requested).toHaveLength(1);
+    // Within the day: the cached answer, no request.
+    expect(await availableUpdate('0.3.3', { fetch: gh.fetchFn, now: day0 + 60_000 })).toBe('0.3.4');
+    expect(gh.requested).toHaveLength(1);
+    // Up to date (or newer, e.g. a source checkout ahead of the release): nothing to say.
+    expect(await availableUpdate('0.3.4', { fetch: gh.fetchFn, now: day0 + 60_000 })).toBeUndefined();
+    expect(await availableUpdate('0.4.0', { fetch: gh.fetchFn, now: day0 + 60_000 })).toBeUndefined();
+    // A day later GitHub is asked again.
+    const later = github('0.3.5');
+    expect(await availableUpdate('0.3.3', { fetch: later.fetchFn, now: day0 + UPDATE_CHECK_INTERVAL_MS })).toBe('0.3.5');
+    expect(later.requested).toHaveLength(1);
+  });
+
+  it('never throws (offline, no release)', async () => {
+    const offline = (async () => Promise.reject(new Error('offline'))) as unknown as typeof fetch;
+    expect(await availableUpdate('0.3.3', { fetch: offline, now: 9e15 })).toBeUndefined();
+    expect(await availableUpdate('0.3.3', { fetch: github(undefined).fetchFn, now: 9e15 + 1 })).toBeUndefined();
   });
 });

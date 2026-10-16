@@ -20,6 +20,12 @@ async function runPrint(app: App, input: string): Promise<void> {
     const { runCommand } = await import('./commands.js');
     const r = await runCommand(app, input);
     if (r.output) stdout.write(r.output + '\n');
+    if (r.choose) {
+      // A picker cannot be answered here: say so instead of silently doing nothing.
+      stderr.write(red(`✗ "${r.choose.title}" needs a choice (${r.choose.options.map((o) => o.label).join(' / ')}): run it in the TUI, or give the choice in the command.\n`));
+      process.exitCode = 1;
+      return;
+    }
     if (!r.prompt) return;
     prompt = r.prompt;
   }
@@ -87,7 +93,7 @@ program
     const tui = interactive ? Promise.all([import('react'), import('ink'), import('./ui/tui/App.js')]) : undefined;
     const [{ createApp }, config] = await Promise.all([import('./app.js'), import('./config.js')]);
     for (const file of await config.ensureGlobalDefaults()) {
-      stderr.write(dim(`Created ${file} (${file.endsWith('.md') ? 'instructions for every project' : 'API key (/auth), model, thinking, permission mode'}). Edit it to change the defaults.\n`));
+      stderr.write(dim(`Created ${file} (API key (/auth), model, thinking, permission mode). Edit it to change the defaults.\n`));
     }
     const app = await createApp({
       cwd: process.cwd(),

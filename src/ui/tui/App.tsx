@@ -289,6 +289,8 @@ export function TuiApp({
   const [mode, setMode] = useState<PermissionMode>(core.permissions.mode);
   const [spend, setSpend] = useState<SpendWindows | undefined>();
   const [mcp, setMcp] = useState(() => mcpCounts(core.mcpStatus));
+  /** A newer release, when there is one (checked in the background at most once a day). */
+  const [update, setUpdate] = useState<string | undefined>();
   const [, forceRender] = useState(0);
   // Prompts typed in this directory, newest first (persisted across sessions).
   const historyRef = useRef<string[]>([]);
@@ -412,6 +414,15 @@ export function TuiApp({
     loadMarkdown().catch(() => {}); // after the first frame; needed only once answers arrive (raw text until then)
     // MCP status lives in the HUD (connected/configured); /mcp lists the servers and their errors.
     void core.mcpReady.then(() => setMcp(mcpCounts(core.mcpStatus)));
+    if (core.config.updateCheck !== false) {
+      void import('../../update.js')
+        .then(({ availableUpdate }) => availableUpdate(VERSION))
+        .then((latest) => {
+          if (!latest) return;
+          setUpdate(latest);
+          push({ kind: 'info', text: `↑ tessera-code ${latest} is available (you have ${VERSION}). Update: tessera-code update` });
+        });
+    }
     void loadCommands(core.ctx.cwd).then((all) => setCommands(all.map(({ name, description, argHint }) => ({ name, description, argHint }))));
   }, [bridge, core.ctx.cwd]);
 
@@ -1002,6 +1013,7 @@ export function TuiApp({
                 </Text>
               </>
             ) : null}
+            {update ? <Text color="yellow">{` · ↑ ${update} (tessera-code update)`}</Text> : null}
           </Text>
         </Box>
       </Box>

@@ -64,7 +64,8 @@ export async function readChangelog(): Promise<ChangelogSection[]> {
   }
 }
 
-async function readState(): Promise<Record<string, unknown>> {
+/** ~/.tessera-code/state.json (release notes seen, update check); {} when absent or unreadable. */
+export async function readState(): Promise<Record<string, unknown>> {
   try {
     return JSON.parse(await readFile(STATE_FILE, 'utf8')) as Record<string, unknown>;
   } catch {
@@ -72,14 +73,19 @@ async function readState(): Promise<Record<string, unknown>> {
   }
 }
 
-/** Remembers that `version`'s changes were shown (atomic write; other processes may read it at the same time). */
-export async function markChangelogSeen(version: string): Promise<void> {
+/** Merges `patch` into state.json (atomic write; other processes may read it at the same time). */
+export async function updateState(patch: Record<string, unknown>): Promise<void> {
   const state = await readState();
-  if (state.lastSeenVersion === version) return;
   await mkdir(HOME_DIR, { recursive: true });
   const tmp = `${STATE_FILE}.${process.pid}.tmp`;
-  await writeFile(tmp, JSON.stringify({ ...state, lastSeenVersion: version }, null, 2) + '\n', { mode: 0o600 });
+  await writeFile(tmp, JSON.stringify({ ...state, ...patch }, null, 2) + '\n', { mode: 0o600 });
   await rename(tmp, STATE_FILE);
+}
+
+/** Remembers that `version`'s changes were shown. */
+export async function markChangelogSeen(version: string): Promise<void> {
+  if ((await readState()).lastSeenVersion === version) return;
+  await updateState({ lastSeenVersion: version });
 }
 
 export interface WhatsNew {

@@ -22,6 +22,8 @@ Then run `tessera-code` in a project folder and register your OpenCode Go API ke
 - Installs the latest [release](https://github.com/BOMONEI/tessera-code-cli/releases) with `npm install -g`, after
   checking its SHA-256 against the release's `SHA256SUMS`. If the global npm folder is not writable (system Node),
   it installs under `~/.local` and tells you how to add `~/.local/bin` to PATH, instead of asking for sudo.
+- When a newer release is out, the app says so at startup (`↑ x.y.z is available`, also in the bottom bar). It asks
+  GitHub at most once a day; `"updateCheck": false` in `config.json` turns it off.
 - Update: `tessera-code update` (`--check` only says whether one is available). It runs the new release's
   `install.sh`, checked against that release's `SHA256SUMS`, so updates go through the same verified path. A source
   checkout (`npm link`) is pointed at `git pull && npm ci && npm run build` instead of being replaced.
@@ -110,6 +112,7 @@ Slash commands:
 | `/model` · `/models` · `/think` · `/mode` | model (ZDR only), reasoning, permission mode |
 | `/permissions` · `/cost` · `/mcp` · `/doctor` · `/init` · `/help` · `/exit` | allow rules, spend, MCP status, environment check, TESSERA.md |
 | `/auth [key]` | register the OpenCode Go API key (verified, saved to `~/.tessera-code/config.json`); without a key, show the one in use |
+| `/prompt [global\|project <text> \| remove g1]` | add your own instructions for every project or this project (see Configuration) |
 | `/command` | keyboard shortcuts and what the bottom bar shows (`path ⎇ branch · ctx ▕██░░▏ · 5h ▕█░░░▏` / `model · thinking level · mode · mcp connected/configured`) |
 
 Markdown commands from `~/.tessera-code/commands/*.md` and `.tessera/commands/*.md` are added too (`$ARGUMENTS` is substituted).
@@ -234,7 +237,19 @@ Project-level `hooks`, `mcpServers`, `allow` and `permissionMode` run code or wi
 
 Hooks receive a JSON payload on stdin. Exit `0` continues (stdout becomes context for `UserPromptSubmit`), exit `2` blocks with stderr as the reason.
 
-Project instructions are read from `TESSERA.md` (or `AGENTS.md` / `CLAUDE.md`) in the working directory and its parents, and from `~/.tessera-code/TESSERA.md`. The first run copies the packaged `defaults/TESSERA.md` (reply in your language, verify, no unsolicited commits, ask when unclear, …) to `~/.tessera-code/TESSERA.md` when that file does not exist; edit or empty it to change the rules for every project.
+**Instructions.** The default working rules (reply in your language, verify, no unsolicited commits, ask when unclear,
+final inspection, …) are built into the system prompt. Your own instructions are added on top and take precedence:
+
+- `/prompt global <text>` — every project; saved in `~/.tessera-code/TESSERA.md`.
+- `/prompt project <text>` — this project only; saved in `<project>/.tessera/TESSERA.md` (kept out of the project root so it
+  never hides a `TESSERA.md`, `AGENTS.md` or `CLAUDE.md` there).
+- `/prompt <text>` asks which of the two; `/prompt` lists them (g1, p1, …); `/prompt remove g1` removes one. Changes
+  apply from the next message.
+
+Added prompts are bullets under `## Added with /prompt` in those files; you can also edit the files by hand, and
+anything else in them is kept. Instructions are also read from `TESSERA.md` (or `AGENTS.md` / `CLAUDE.md`) in the
+working directory and its parents. An unedited copy of the defaults that earlier versions put in
+`~/.tessera-code/TESSERA.md` is removed (the rules are built in now); an edited one is kept.
 
 ## Performance
 

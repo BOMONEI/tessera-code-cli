@@ -1,6 +1,4 @@
-import { chmod, copyFile, readFile, mkdir, rename, writeFile } from 'node:fs/promises';
-import { constants as fsConstants } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { chmod, readFile, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -38,6 +36,8 @@ export interface Config {
   permissionMode: PermissionMode;
   /** Notify (bell + desktop notification) when a turn took at least this many seconds; 0 disables. */
   notifyAfterSeconds: number;
+  /** Check GitHub Releases (at most once a day) and say when a newer version is out. */
+  updateCheck: boolean;
 }
 
 export interface FallbackConfig {
@@ -79,6 +79,7 @@ const DEFAULTS: Config = {
   showThinking: true,
   permissionMode: 'default',
   notifyAfterSeconds: 20,
+  updateCheck: true,
   fallback: { models: DEFAULT_FALLBACK, firstTokenTimeoutMs: 0, stickyMs: 5 * 60_000 },
 };
 
@@ -201,16 +202,31 @@ export const DEFAULT_CONFIG_FILE = {
 
 export const GLOBAL_INSTRUCTIONS = join(HOME_DIR, 'TESSERA.md');
 
-/** The packaged default instructions: defaults/TESSERA.md, found from src/ (dev) or dist/bundle/ (built). */
-export function defaultInstructionsPath(): string | undefined {
-  return ['../defaults/TESSERA.md', '../../defaults/TESSERA.md']
-    .map((rel) => fileURLToPath(new URL(rel, import.meta.url)))
-    .find((p) => existsSync(p));
+/**
+ * SHA-256 of the default instructions earlier releases copied to ~/.tessera-code/TESSERA.md (0.3.0-0.3.2 and 0.3.3).
+ * Those rules are built into the system prompt now, so an unedited copy would only repeat them; it is removed. A file
+ * the user changed in any way is kept.
+ */
+const OLD_DEFAULT_INSTRUCTIONS = new Set([
+  'e88e307fa7503b6632368d24740408239602a8c405a0ab45280edd11f906b5ba',
+  '76eee05a79de79cc3e2e215cd20a193ec472a924c5dc2630c0991e1a33e7fe50',
+]);
+
+async function removeOldDefaultInstructions(): Promise<boolean> {
+  try {
+    const content = await readFile(GLOBAL_INSTRUCTIONS, 'utf8');
+    if (!OLD_DEFAULT_INSTRUCTIONS.has(createHash('sha256').update(content.trim()).digest('hex'))) return false;
+    await rm(GLOBAL_INSTRUCTIONS);
+    return true;
+  } catch {
+    return false; // absent or unreadable: nothing to do
+  }
 }
 
 /**
- * First run: creates ~/.tessera-code/config.json (main defaults) and ~/.tessera-code/TESSERA.md (the packaged
- * global instructions) when they do not exist. Existing files are never touched. Returns the paths created.
+ * First run: creates ~/.tessera-code/config.json (main defaults) when it does not exist, and brings an existing one
+ * up to date (see addMissingDefaults). Also drops an unedited copy of the old default instructions. Returns the
+ * paths created.
  */
 export async function ensureGlobalDefaults(): Promise<string[]> {
   const created: string[] = [];
@@ -222,16 +238,7 @@ export async function ensureGlobalDefaults(): Promise<string[]> {
     // exists already (or was created meanwhile by another tessera-code process): make sure it has the apiKey entry
     await addMissingDefaults();
   }
-  const instructions = defaultInstructionsPath();
-  if (instructions) {
-    try {
-      await copyFile(instructions, GLOBAL_INSTRUCTIONS, fsConstants.COPYFILE_EXCL);
-      await chmod(GLOBAL_INSTRUCTIONS, 0o600); // the user's own settings, like config.json
-      created.push(GLOBAL_INSTRUCTIONS);
-    } catch {
-      // exists already
-    }
-  }
+  await removeOldDefaultInstructions();
   return created;
 }
 

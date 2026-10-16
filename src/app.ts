@@ -50,6 +50,8 @@ export interface App {
   readonly apiKeySource: string;
   /** Uses a key registered with /auth from now on (the caller has stored it). */
   setApiKey(key: string, source: string): void;
+  /** Re-reads instruction files (TESSERA.md, /prompt) into the system prompt; applies from the next request. */
+  reloadInstructions(): Promise<void>;
   /** Switches the permission mode and makes it the default everywhere ("permissionMode" in config.json). */
   setPermissionMode(mode: PermissionMode): Promise<void>;
   mcpStatus: McpServerStatus[];
@@ -291,6 +293,9 @@ export async function createApp(opts: AppOptions): Promise<App> {
     config,
     get apiKeySource() {
       return auth.source;
+    },
+    async reloadInstructions() {
+      agent.system = await buildSystemPrompt(opts.cwd, agent.model.id);
     },
     async setPermissionMode(mode) {
       permissions.mode = mode;

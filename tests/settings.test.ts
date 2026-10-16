@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { LanguageModelV4, LanguageModelV4CallOptions } from '@ai-sdk/provider';
@@ -34,7 +34,7 @@ vi.mock('../src/providers/index.js', async (orig) => ({
 vi.mock('../src/cost/ledger.js', () => ({ recordSpend: async () => {} }));
 
 const { Agent } = await import('../src/agent/agent.js');
-const { loadConfig, parsePermissionMode, ensureGlobalDefaults, GLOBAL_CONFIG, GLOBAL_INSTRUCTIONS, DEFAULT_CONFIG_FILE, defaultInstructionsPath, projectTrust } = await import('../src/config.js');
+const { loadConfig, parsePermissionMode, ensureGlobalDefaults, GLOBAL_CONFIG, GLOBAL_INSTRUCTIONS, DEFAULT_CONFIG_FILE, projectTrust } = await import('../src/config.js');
 
 const model: ModelInfo = { id: 'mock', name: 'mock', format: 'chat', context: 100_000, output: 1000, reasoning: true, cost: { input: 0, output: 0, cacheRead: 0 } };
 
@@ -57,9 +57,9 @@ describe('global config file', () => {
   it('is created once with model, thinking and permission mode', async () => {
     rmSync(GLOBAL_CONFIG, { force: true });
     rmSync(GLOBAL_INSTRUCTIONS, { force: true });
-    expect(await ensureGlobalDefaults()).toEqual([GLOBAL_CONFIG, GLOBAL_INSTRUCTIONS]);
-    expect(readFileSync(GLOBAL_INSTRUCTIONS, 'utf8')).toBe(readFileSync(defaultInstructionsPath()!, 'utf8'));
-    expect(readFileSync(GLOBAL_INSTRUCTIONS, 'utf8')).toContain('NO UNSOLICITED COMMITS');
+    // The default rules are built into the system prompt; no TESSERA.md is created for them.
+    expect(await ensureGlobalDefaults()).toEqual([GLOBAL_CONFIG]);
+    expect(existsSync(GLOBAL_INSTRUCTIONS)).toBe(false);
     expect(JSON.parse(readFileSync(GLOBAL_CONFIG, 'utf8'))).toEqual(DEFAULT_CONFIG_FILE);
     expect(DEFAULT_CONFIG_FILE).toMatchObject({ thinkingLevel: 'medium', permissionMode: 'default' });
     expect(statSync(GLOBAL_CONFIG).mode & 0o777).toBe(0o600);

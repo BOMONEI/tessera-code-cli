@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.4 — 2026-10-16
+
+### Added
+- `/prompt` adds your own instructions: `/prompt global <text>` for every project (`~/.tessera-code/TESSERA.md`),
+  `/prompt project <text>` for this project (`.tessera/TESSERA.md`); `/prompt` lists them, `/prompt remove g1`
+  deletes one. They apply from the next message.
+- A notice when a newer release is out (`↑ x.y.z is available`, also in the bottom bar), checked at most once a day;
+  `"updateCheck": false` turns it off.
+
+### Changed
+- The default working rules are built into the system prompt instead of being copied to
+  `~/.tessera-code/TESSERA.md`; an unedited copy from an earlier version is removed, an edited one is kept.
+- In `-p` mode, a command that needs a choice says so instead of doing nothing.
+
 ## 0.3.3 — 2026-10-16
 
 ### Changed

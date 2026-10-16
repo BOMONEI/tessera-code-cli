@@ -5,7 +5,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { compareVersions } from './changelog.js';
+import { compareVersions, readState, updateState } from './changelog.js';
 
 /** The public repository whose GitHub Releases carry the installable package (see install.sh). */
 export const RELEASE_REPO = process.env.TESSERA_REPO ?? 'BOMONEI/tessera-code-cli';
@@ -19,6 +19,29 @@ export async function latestVersion(fetchFn: typeof fetch = fetch): Promise<stri
   const tag = new URL(r.url).pathname.split('/').pop() ?? '';
   if (!r.ok || !/^v\d+\.\d+\.\d+/.test(tag)) throw new Error(`no release found at https://github.com/${RELEASE_REPO}/releases`);
   return tag.slice(1);
+}
+
+/** How often the TUI asks GitHub for the latest release. */
+export const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The latest release when it is newer than `current`, else undefined. GitHub is asked at most once per
+ * UPDATE_CHECK_INTERVAL_MS (the answer is kept in state.json), so starting the app stays offline most of the time.
+ * Never throws: an update notice is not worth an error.
+ */
+export async function availableUpdate(current: string, opts: { fetch?: typeof fetch; now?: number } = {}): Promise<string | undefined> {
+  try {
+    const now = opts.now ?? Date.now();
+    const cached = (await readState()).updateCheck as { at?: number; latest?: string } | undefined;
+    let latest = cached?.latest;
+    if (!cached?.at || !latest || now - cached.at >= UPDATE_CHECK_INTERVAL_MS || now < cached.at) {
+      latest = await latestVersion(opts.fetch ?? fetch);
+      await updateState({ updateCheck: { at: now, latest } });
+    }
+    return compareVersions(latest, current) > 0 ? latest : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** The folder holding package.json, from src/ (dev) or dist/bundle/ (built). */
