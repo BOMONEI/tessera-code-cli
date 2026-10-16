@@ -14,7 +14,7 @@ import type { AgentEvent, ImageInput } from './agent/agent.js';
 import { runShell } from './tools/shell.js';
 import { truncate } from './tools/context.js';
 import { skillTools } from './tools/skill.js';
-import { SUBAGENT_ROLES, taskTool } from './tools/task.js';
+import { SUBAGENT_ROLES, taskTool, type SubagentProgress } from './tools/task.js';
 import { discoverSkills, type Skill } from './skills.js';
 import { attachMentionedFiles } from './agent/attachments.js';
 import { HookRunner } from './hooks.js';
@@ -62,7 +62,7 @@ export interface App {
   /** Switches the mode now and saves it ("subagents" / "multiAgent" in config.json). */
   setAgentsMode(mode: AgentsMode): Promise<void>;
   /** Set by the UI: what a running subagent is doing. */
-  onTaskProgress?: (description: string, activity: string) => void;
+  onTaskProgress?: (p: SubagentProgress) => void;
   /** Switches the permission mode and makes it the default everywhere ("permissionMode" in config.json). */
   setPermissionMode(mode: PermissionMode): Promise<void>;
   mcpStatus: McpServerStatus[];
@@ -254,7 +254,7 @@ export async function createApp(opts: AppOptions): Promise<App> {
     system: async (type) => `${await systemPrompt(agent.model.id)}\n\n# Your role\n${SUBAGENT_ROLES[type]}`.replace(/\n\n# Subagents[\s\S]*?(?=\n\n# )/, ''),
     agentOptions: () => ({ maxSteps: config.maxSteps, thinking: agent.thinking, thinkingLevel: agent.thinkingLevel, contextLimit: config.contextLimit }),
     parallel,
-    onProgress: (description, activity) => app.onTaskProgress?.(description, activity),
+    onProgress: (p) => app.onTaskProgress?.(p),
     onUsage: (u) => agent.absorbUsage(u),
   });
   /** The agent's tools: built-ins, connected MCP servers, and the task tool when subagents are on. */

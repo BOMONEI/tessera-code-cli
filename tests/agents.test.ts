@@ -56,10 +56,11 @@ function makeTask(parallel: number) {
     system: async (type) => `system for ${type}`,
     agentOptions: () => ({ maxSteps: 5, thinking: false, contextLimit: 500_000 }),
     parallel: () => parallel,
-    onProgress: (d, a) => progress.push(`${d}:${a}`),
+    onProgress: (p) => progress.push(`${p.id}:${p.description}:${p.state}:${p.activity}`),
     onUsage: (u) => absorbed.push(u.inputTokens),
   }).task as unknown as { execute: (i: object, o: object) => Promise<string> };
-  const run = (prompt: string) => t.execute({ description: prompt, prompt, subagent_type: 'explore' }, { abortSignal: undefined, toolCallId: 'x', messages: [] });
+  let n = 0;
+  const run = (prompt: string) => t.execute({ description: prompt, prompt, subagent_type: 'explore' }, { abortSignal: undefined, toolCallId: `call${++n}`, messages: [] });
   return { run, absorbed, progress };
 }
 
@@ -75,7 +76,7 @@ describe('subagents', () => {
     expect(out).toMatch(/^REPORT for alpha/);
     expect(out).toContain('[explore subagent · 0 tool calls]');
     expect(absorbed).toEqual([100]);
-    expect(progress).toEqual(['look at alpha:starting', 'look at alpha:done']);
+    expect(progress).toEqual(['call1:look at alpha:running:starting', 'call1:look at alpha:done:finished']); // a free slot: never reported as queued
   });
 
   it('runs one at a time with subagents, in parallel with multi-agent', async () => {
@@ -93,6 +94,19 @@ describe('subagents', () => {
     await Promise.all([multi.run('alpha'), multi.run('beta'), multi.run('alpha'), multi.run('beta')]);
     expect(peak).toBe(4);
     expect(Date.now() - t).toBeLessThan(190);
+  });
+
+  it('reports each concurrent subagent separately, with the ones over the limit queued', async () => {
+    const { run, progress } = makeTask(1);
+    await Promise.all([run('alpha'), run('beta')]);
+    // One slot: alpha runs at once, beta waits and starts only after alpha is done.
+    expect(progress).toContain('call2:beta:queued:waiting for a free slot');
+    expect(progress).not.toContain('call1:alpha:queued:waiting for a free slot');
+    expect(progress.indexOf('call2:beta:running:starting')).toBeGreaterThan(progress.indexOf('call1:alpha:done:finished'));
+    // With free slots nobody is reported as waiting.
+    const multi = makeTask(4);
+    await Promise.all([multi.run('alpha'), multi.run('beta')]);
+    expect(multi.progress.filter((p) => p.includes(':queued:'))).toEqual([]);
   });
 });
 

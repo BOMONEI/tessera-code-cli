@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.2 — 2026-10-16
+
+### Fixed
+- Multi-agent: each running subagent now has its own line under the spinner (type, task, current step, time), and
+  ones waiting for a free slot say so. Before, one line showed whichever subagent moved last. `-p` prints the steps
+  on stderr.
+
 ## 0.4.1 — 2026-10-16
 
 ### Fixed

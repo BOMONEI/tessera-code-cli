@@ -31,6 +31,12 @@ async function runPrint(app: App, input: string): Promise<void> {
   }
   let failed = false;
   let midLine = false;
+  // Subagents report on stderr like the main agent's tool calls, one line per step.
+  app.onTaskProgress = (p) => {
+    if (p.state === 'queued' || p.activity === 'starting') return;
+    stderr.write(dim(`${midLine ? '\n' : ''}  ↳ ${p.type} · ${p.description} › ${p.activity}\n`));
+    midLine = false;
+  };
   for await (const ev of app.run(prompt)) {
     if (ev.type === 'text') {
       stdout.write(ev.text);

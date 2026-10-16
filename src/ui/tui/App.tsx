@@ -19,6 +19,7 @@ import { imagesFromPaths, readClipboardImage } from '../images.js';
 import { copyToClipboard } from '../clipboard.js';
 import type { ImageInput } from '../../agent/agent.js';
 import type { CompactProgress } from '../../agent/compact.js';
+import type { SubagentProgress } from '../../tools/task.js';
 import type { WhatsNew } from '../../changelog.js';
 import { Input, caretOf } from './Input.js';
 import { applyCompletion, complete, enterAction, type CommandInfo, type CompletionItem } from '../completion.js';
@@ -72,6 +73,8 @@ function elapsedLabel(ms: number): string {
 
 // shift+tab cycle. 'dangerous' (never asks) is left out so it is never reached by accident: /mode, config or flag only.
 const MODES: PermissionMode[] = ['default', 'acceptEdits', 'plan', 'bypass'];
+/** Subagent lines shown under the spinner before "… N more". */
+const MAX_SUBAGENT_ROWS = 6;
 
 /** HUD counts for the MCP indicator: connected out of configured, and whether any are still starting. */
 export function mcpCounts(status: ReadonlyArray<{ ok: boolean; error?: string }>): { ok: number; total: number; connecting: boolean } {
@@ -292,6 +295,8 @@ export function TuiApp({
   /** A newer release, when there is one (checked in the background at most once a day). */
   const [update, setUpdate] = useState<string | undefined>();
   const [agentsMode, setAgentsModeState] = useState(() => core.agentsMode());
+  /** Subagents running or waiting for a slot, in start order: one line each under the spinner. */
+  const [subagents, setSubagents] = useState<Array<SubagentProgress & { since: number }>>([]);
   const [, forceRender] = useState(0);
   // Prompts typed in this directory, newest first (persisted across sessions).
   const historyRef = useRef<string[]>([]);
@@ -405,8 +410,16 @@ export function TuiApp({
 
   useEffect(() => {
     // Compaction (auto or /compact) reports an estimated percentage; it replaces the spinner label meanwhile.
-    // A subagent's current step replaces the spinner label: "task(find usages) › read(src/app.ts)".
-    core.onTaskProgress = (description, activity) => setStatus(activity === 'done' ? 'Thinking' : `task(${description}) › ${activity}`);
+    // Each subagent gets its own line (several run at once in multi-agent mode); a finished one leaves the list.
+    core.onTaskProgress = (p) =>
+      setSubagents((list) => {
+        if (p.state === 'done') return list.filter((s) => s.id !== p.id);
+        const i = list.findIndex((s) => s.id === p.id);
+        if (i < 0) return [...list, { ...p, since: Date.now() }];
+        const next = [...list];
+        next[i] = { ...next[i]!, ...p, since: next[i]!.state === 'queued' && p.state === 'running' ? Date.now() : next[i]!.since };
+        return next;
+      });
     agent.onCompactProgress = (p) => setStatus(p.phase === 'done' ? (turnRef.current ? 'Thinking' : undefined) : compactLabel(p));
     bridge.ask = (req) => new Promise<Decision>((resolve) => setPending({ req, resolve }));
     bridge.onDiff = (path, diff) => pendingDiffs.current.push({ path, diff });
@@ -468,6 +481,7 @@ export function TuiApp({
     return controller;
   };
   const endBusy = () => {
+    setSubagents([]); // an interrupted turn leaves no subagent lines behind
     abortRef.current = undefined;
     busyRef.current = false;
     setBusy(false);
@@ -814,7 +828,8 @@ export function TuiApp({
   const meterWidth = usageBarWidth('ctx', ctxPct, ctxLimit) + (fiveHourPct !== undefined ? 2 + usageBarWidth('5h', fiveHourPct) : 0);
   const shellMode = input.startsWith('!');
   const hudSplit = size.columns < meterWidth + 30;
-  const liveRows = size.rows - 9 - (hudSplit ? 1 : 0) - inputRows - queuedRows - pickerRows - (menu ? menuShown.length + 1 : 0);
+  const subagentRows = busy && !pending ? Math.min(subagents.length, MAX_SUBAGENT_ROWS + 1) : 0;
+  const liveRows = size.rows - 9 - (hudSplit ? 1 : 0) - inputRows - queuedRows - pickerRows - subagentRows - (menu ? menuShown.length + 1 : 0);
   const live = streaming ? streamTail(streaming, size.columns - 1, liveRows - 1) : undefined;
   // A short rolling window: enough to see it working without pushing the input box around.
   const thinkingTail = thinkingLive && !streaming && core.config.showThinking ? streamTail(thinkingLive, size.columns - 3, Math.min(6, Math.max(1, liveRows - 2))) : undefined;
@@ -912,8 +927,28 @@ export function TuiApp({
             </Text>
             <Text dimColor>
               {' '}
-              {status ?? 'Working'}… {busySince !== undefined ? `${elapsedLabel(Date.now() - busySince)} ` : ''}(esc to interrupt)
+              {subagents.length ? `${subagents.filter((s) => s.state === 'running').length} subagent${subagents.length === 1 ? '' : 's'} working` : (status ?? 'Working')}…{' '}
+              {busySince !== undefined ? `${elapsedLabel(Date.now() - busySince)} ` : ''}(esc to interrupt)
             </Text>
+          </Box>
+        ) : null}
+        {busy && !pending && subagents.length ? (
+          <Box flexDirection="column">
+            {subagents.slice(0, MAX_SUBAGENT_ROWS).map((s, i, shown) => (
+              <Text key={s.id} wrap="truncate">
+                <Text dimColor>{`  ${i === shown.length - 1 && subagents.length <= MAX_SUBAGENT_ROWS ? '└' : '├'} `}</Text>
+                <Text color={s.state === 'queued' ? undefined : 'cyan'} dimColor={s.state === 'queued'}>
+                  {s.type}
+                </Text>
+                <Text> {middleEllipsis(s.description, 32)}</Text>
+                <Text dimColor>
+                  {'  › '}
+                  {s.activity}
+                  {s.state === 'running' ? `  ${elapsedLabel(Date.now() - s.since)}` : ''}
+                </Text>
+              </Text>
+            ))}
+            {subagents.length > MAX_SUBAGENT_ROWS ? <Text dimColor>{`  └ … ${subagents.length - MAX_SUBAGENT_ROWS} more`}</Text> : null}
           </Box>
         ) : null}
         <Box ref={inputBoxRef} borderStyle="round" borderColor={busy || overlay ? 'gray' : shellMode ? 'magenta' : 'cyan'} paddingX={1} marginTop={1}>
