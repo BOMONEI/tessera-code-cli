@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import type { HooksConfig } from './hooks.js';
 import { projectSkills } from './skills.js';
+import type { ProviderSettings } from './providers/registry.js';
 import type { PermissionMode } from './permissions.js';
 
 export const HOME_DIR = process.env.TESSERA_HOME ?? join(homedir(), '.tessera-code');
@@ -43,6 +44,8 @@ export interface Config {
   subagents: boolean;
   /** Let several subagents run in parallel (implies subagents). Both false: a single agent only. */
   multiAgent: boolean;
+  /** Other model providers: { "<id>": { apiKey?, baseURL?, zdr? } } (see providers/registry.ts). Global config only. */
+  providers: Record<string, ProviderSettings>;
 }
 
 export interface FallbackConfig {
@@ -87,6 +90,7 @@ const DEFAULTS: Config = {
   updateCheck: true,
   subagents: false,
   multiAgent: false,
+  providers: {},
   fallback: { models: DEFAULT_FALLBACK, firstTokenTimeoutMs: 0, stickyMs: 5 * 60_000 },
 };
 
@@ -169,6 +173,9 @@ export async function loadConfig(cwd: string, opts: { trusted: boolean }): Promi
   // The API key is read by resolveApiKey from the global file only; it never becomes part of the settings.
   delete global.apiKey;
   delete project.apiKey;
+  // Keys and API addresses of other providers come from the user's own config only: a repository's settings must not
+  // be able to swap a key or send prompts to an address of its choosing.
+  delete project.providers;
   const merged = { ...DEFAULTS, ...global, ...project } as Config;
   // Pre-0.2 name of the same setting.
   const legacy = (project.autoCompactTokens ?? global.autoCompactTokens) as unknown;

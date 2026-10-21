@@ -155,12 +155,17 @@ program
 
 program
   .command('models')
-  .description('list usable (zero-data-retention) OpenCode Go models')
+  .description('list usable models: OpenCode Go (ZDR) and connected providers (<provider>/<model>)')
   .option('--refresh', 'refetch the catalog from models.dev')
   .action(async (opts) => {
-    const { isZdr, loadCatalog } = await import('./providers/catalog.js');
-    for (const m of (await loadCatalog({ refresh: opts.refresh })).filter((m) => isZdr(m.id))) {
-      stdout.write(`${m.id.padEnd(30)} ${m.format.padEnd(9)} ctx ${formatTokens(m.context).padEnd(7)} $${m.cost.input}/$${m.cost.output} per 1M\n`);
+    const [{ loadCatalog, modelIsZdr, usableModels }, { loadConfig }, { setProviderSettings }] = await Promise.all([
+      import('./providers/catalog.js'),
+      import('./config.js'),
+      import('./providers/registry.js'),
+    ]);
+    setProviderSettings((await loadConfig(process.cwd(), { trusted: false })).providers);
+    for (const m of usableModels(await loadCatalog({ refresh: opts.refresh }))) {
+      stdout.write(`${m.id.padEnd(40)} ${(modelIsZdr(m) ? 'ZDR' : 'non-ZDR').padEnd(8)} ${m.format.padEnd(9)} ctx ${formatTokens(m.context).padEnd(7)} $${m.cost.input}/$${m.cost.output} per 1M\n`);
     }
   });
 

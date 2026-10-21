@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import type { ToolSet } from 'ai';
 import { HOME_DIR, THINKING_LEVELS, addProjectAllowRule, loadConfig, projectTrust, resolveApiKey, saveGlobalSetting, trustProject, type Config, type ThinkingLevel } from './config.js';
-import { loadCatalog, findModel, isZdr, type ModelInfo } from './providers/catalog.js';
+import { loadCatalog, findModel, isAllowedModel, isZdr, modelIsZdr, type ModelInfo } from './providers/catalog.js';
+import { providerDef, providerKey, setProviderSettings } from './providers/registry.js';
 import { PermissionManager, type PermissionMode, type PromptFn } from './permissions.js';
 import { Agent } from './agent/agent.js';
-import { NonZdrModelError } from './providers/index.js';
+import { MissingProviderKeyError, NonZdrModelError } from './providers/index.js';
 import { warmUp } from './providers/net.js';
 import { buildSystemPrompt } from './agent/prompt.js';
 import { SessionStore, type Checkpoint, type SessionState } from './session/store.js';
@@ -67,7 +68,9 @@ export interface App {
   setPermissionMode(mode: PermissionMode): Promise<void>;
   mcpStatus: McpServerStatus[];
   /** Resolves once MCP servers have connected (or failed); their tools are available from then on. */
-  mcpReady: Promise<void>;
+  readonly mcpReady: Promise<void>;
+  /** Re-reads mcpServers from the config files and reconnects (/mcp reload); resolves with the new status. */
+  reloadMcp(): Promise<McpServerStatus[]>;
   /** Fallback model ids in use, in order. */
   fallbackModels: string[];
   /** Startup problems worth showing (invalid hook matchers etc.). */
@@ -94,6 +97,12 @@ export interface App {
 
 /** How long a turn waits for MCP servers that are still connecting (exa usually connects in ~0.6 s). */
 const MCP_TURN_WAIT_MS = 1500;
+
+/** Shown when a model that may keep data is in use (startup, /model). */
+export function nonZdrWarning(model: Pick<ModelInfo, 'id' | 'provider'>): string {
+  const name = model.provider ? (providerDef(model.provider)?.name ?? model.provider) : 'OpenCode Go';
+  return `${model.id} is not zero-data-retention: ${name} may keep prompts and code under its own terms. Avoid confidential data, or set "zdr": true for it in config.json if your account has a ZDR agreement.`;
+}
 
 export type AgentsMode = 'single' | 'subagents' | 'multi';
 /** Subagents running at once in multi-agent mode. */
@@ -165,11 +174,20 @@ export async function createApp(opts: AppOptions): Promise<App> {
   // Each server's tools are usable as soon as it connects (the agent is created meanwhile; see applyMcp below).
   let mcpLatest: Omit<McpConnection, 'close'> | undefined;
   let applyMcp: ((m: Omit<McpConnection, 'close'>) => void) | undefined;
-  const mcpConnecting = connectMcp(config.mcpServers, opts.cwd, (partial) => {
-    mcpLatest = partial;
-    applyMcp?.(partial);
-  });
-  let mcpStatus: McpServerStatus[] = Object.keys(config.mcpServers).map((name) => ({ name, ok: false, tools: [], error: 'connecting…' }));
+  /** Bumped by /mcp reload: progress from an earlier connection round is ignored. */
+  let mcpGeneration = 0;
+  const connecting = (servers: Record<string, unknown>): McpServerStatus[] => Object.keys(servers).map((name) => ({ name, ok: false, tools: [], error: 'connecting…' }));
+  const startMcp = (servers: Config['mcpServers']) => {
+    const generation = ++mcpGeneration;
+    return connectMcp(servers, opts.cwd, (partial) => {
+      if (generation !== mcpGeneration) return;
+      mcpLatest = partial;
+      applyMcp?.(partial);
+    });
+  };
+  let mcpConnecting = startMcp(config.mcpServers);
+  let mcpStatus: McpServerStatus[] = connecting(config.mcpServers);
+  setProviderSettings(config.providers);
   const catalog = await loadCatalog();
 
   let resumeId: string | undefined;
@@ -215,7 +233,7 @@ export async function createApp(opts: AppOptions): Promise<App> {
   let mcpServerOf: Record<string, string> = {};
 
   const model = findModel(catalog, opts.model ?? config.model);
-  if (!isZdr(model.id)) throw new NonZdrModelError(model.id);
+  if (!isAllowedModel(model)) throw new NonZdrModelError(model.id);
   // Fallbacks must be ZDR and known to the catalog (unknown ids would have no limits or prices).
   const skipped = config.fallback.models.filter((id) => !isZdr(id) || !catalog.some((m) => m.id === id));
   const fallbackModels = config.fallback.models.filter((id) => !skipped.includes(id)).map((id) => findModel(catalog, id));
@@ -269,11 +287,34 @@ export async function createApp(opts: AppOptions): Promise<App> {
     if (Object.keys(m.tools).length || agentsOn()) rebuildTools();
   };
   if (mcpLatest) applyMcp(mcpLatest);
-  const mcpReady = mcpConnecting
-    .then((mcp) => applyMcp!(mcp))
-    .catch((e: Error) => {
-      mcpStatus = mcpStatus.map((s) => ({ ...s, error: e.message }));
-    });
+  const whenReady = (conn: Promise<McpConnection>, generation: number) =>
+    conn
+      .then((mcp) => {
+        if (generation === mcpGeneration) applyMcp!(mcp);
+      })
+      .catch((e: Error) => {
+        if (generation === mcpGeneration) mcpStatus = mcpStatus.map((s) => ({ ...s, error: e.message }));
+      });
+  let mcpReady = whenReady(mcpConnecting, mcpGeneration);
+
+  /**
+   * Re-reads the MCP servers from the config files and reconnects, keeping the conversation: servers added, changed
+   * or removed since startup take effect now. The old connections are closed.
+   */
+  const reloadMcp = async (): Promise<McpServerStatus[]> => {
+    const fresh = await loadConfig(opts.cwd, { trusted });
+    config.mcpServers = fresh.mcpServers;
+    const old = mcpConnecting;
+    mcpTools = {};
+    mcpServerOf = {};
+    mcpStatus = connecting(config.mcpServers);
+    mcpConnecting = startMcp(config.mcpServers);
+    mcpReady = whenReady(mcpConnecting, mcpGeneration);
+    rebuildTools();
+    void old.then((m) => m.close()).catch(() => {});
+    await mcpReady;
+    return mcpStatus;
+  };
 
   const saveState = async () => {
     if (!agent.messages.length && !store.exists) return; // an unused session leaves no file behind
@@ -281,8 +322,12 @@ export async function createApp(opts: AppOptions): Promise<App> {
   };
 
   const setModel = async (id: string) => {
-    if (!isZdr(id)) throw new NonZdrModelError(id);
-    agent.model = findModel(catalog, id);
+    const next = findModel(catalog, id);
+    if (!isAllowedModel(next)) throw new NonZdrModelError(id);
+    if (next.provider && !providerDef(next.provider)?.local && !providerKey(next.provider)) {
+      throw new MissingProviderKeyError(`No API key for ${providerDef(next.provider)!.name}: /auth ${next.provider} <key> first.`);
+    }
+    agent.model = next;
     agent.resetFallback();
     agent.system = await systemPrompt(agent.model.id);
   };
@@ -299,7 +344,7 @@ export async function createApp(opts: AppOptions): Promise<App> {
     title = loaded.title;
     const st = loaded.state;
     if (st) {
-      if (!keep.model && st.model !== agent.model.id && isZdr(st.model) && catalog.some((m) => m.id === st.model)) await setModel(st.model);
+      if (!keep.model && st.model !== agent.model.id && catalog.some((m) => m.id === st.model) && isAllowedModel(findModel(catalog, st.model))) await setModel(st.model).catch(() => {});
       if (!keep.thinking) {
         agent.thinking = st.thinking;
         if (THINKING_LEVELS.includes(st.thinkingLevel as ThinkingLevel)) agent.thinkingLevel = st.thinkingLevel as ThinkingLevel;
@@ -361,15 +406,20 @@ export async function createApp(opts: AppOptions): Promise<App> {
     get mcpStatus() {
       return mcpStatus;
     },
-    mcpReady,
+    get mcpReady() {
+      return mcpReady;
+    },
+    reloadMcp,
     projectTrusted: trusted,
     fallbackModels: fallbackModels.filter((m) => m.id !== model.id).map((m) => m.id),
     warnings: [
-      ...(auth.key ? [] : [NO_API_KEY]),
+      ...(auth.key || model.provider ? [] : [NO_API_KEY]),
+      ...(modelIsZdr(model) ? [] : [nonZdrWarning(model)]),
       ...hooks.warnings,
       ...skipped.map((id) => `Fallback model ${id} ignored: ${isZdr(id) ? 'not in the model catalog' : 'not zero-data-retention'}.`)],
     async *run(prompt, signal, images) {
-      if (!agent.apiKey) {
+      // The OpenCode key is needed for Go models (and the fallback chain); other providers check their own key.
+      if (!agent.model.provider && !agent.apiKey) {
         yield { type: 'error', message: NO_API_KEY };
         return;
       }

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import type { App } from './app.js';
 import { BASE_URL, HOME_DIR } from './config.js';
-import { isZdr } from './providers/catalog.js';
+import { findModel, modelIsZdr } from './providers/catalog.js';
 import { apiFetch } from './providers/net.js';
 
 export interface Check {
@@ -40,9 +40,10 @@ export async function runDoctor(app: App): Promise<Check[]> {
     checks.push({ ok: false, name: 'OpenCode Go API', detail: `unreachable: ${(e as Error).message}` });
   }
 
-  const chain = [app.agent.model.id, ...app.fallbackModels];
-  const nonZdr = chain.filter((id) => !isZdr(id));
-  checks.push({ ok: nonZdr.length ? false : true, name: 'Models (ZDR)', detail: `${chain.join(' → ')}${nonZdr.length ? ` · not ZDR: ${nonZdr.join(', ')}` : ''}` });
+  const chain = [app.agent.model, ...app.fallbackModels.map((id) => findModel(app.catalog, id))];
+  const nonZdr = chain.filter((m) => !modelIsZdr(m)).map((m) => m.id);
+  // Another provider's non-ZDR model is the user's choice (warned about), so it is a warning, not a failure.
+  checks.push({ ok: nonZdr.length ? 'warn' : true, name: 'Models (ZDR)', detail: `${chain.map((m) => m.id).join(' → ')}${nonZdr.length ? ` · not ZDR: ${nonZdr.join(', ')}` : ''}` });
 
   const catalogFile = join(HOME_DIR, 'cache', 'models.json');
   const age = existsSync(catalogFile) ? (Date.now() - statSync(catalogFile).mtimeMs) / 3_600_000 : undefined;

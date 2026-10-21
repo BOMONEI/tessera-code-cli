@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.0 — 2026-10-21
+
+### Added
+- **Other model providers**: OpenAI, Anthropic (Claude), OpenRouter, Command Code, Google Gemini, xAI, DeepSeek,
+  Mistral, Cohere, Groq, Cerebras, Together, Fireworks, DeepInfra, Perplexity, Moonshot, Z.ai, Alibaba, NVIDIA,
+  Hugging Face, Baseten, OpenCode Zen, and local Ollama / LM Studio. `/auth <provider> <key>`, then
+  `/model <provider>/<model>`; `/providers` and `/models` show what is available. OpenCode Go stays ZDR-only; other
+  providers' models are marked non-ZDR with a warning unless declared `"zdr": true` (or local).
+- `/mcp reload` re-reads MCP servers from the config and reconnects without restarting the conversation.
+
 ## 0.4.3 — 2026-10-21
 
 ### Fixed

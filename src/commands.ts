@@ -4,12 +4,14 @@ import { basename, join } from 'node:path';
 import type { App, AgentsMode } from './app.js';
 import { HOME_DIR, THINKING_LEVELS, type ThinkingLevel } from './config.js';
 import { GO_LIMITS, spendWindows } from './cost/ledger.js';
-import { isZdr } from './providers/catalog.js';
+import { isZdr, localModels, modelIsZdr, usableModels, type ModelInfo } from './providers/catalog.js';
+import { OPENCODE_GO, PROVIDERS, providerDef, providerIsZdr, providerKey, providerSettings, setProviderSettings, splitModelId } from './providers/registry.js';
+import { nonZdrWarning } from './app.js';
 import type { PermissionMode } from './permissions.js';
 import { SessionStore } from './session/store.js';
 import { formatTokens, formatUsage } from './ui/format.js';
 import type { ModelMessage } from 'ai';
-import { checkApiKey, maskKey, removeProjectAllowRule, saveApiKey, userProjectAllow } from './config.js';
+import { checkApiKey, maskKey, removeProjectAllowRule, saveApiKey, saveGlobalSetting, userProjectAllow } from './config.js';
 import { apiFetch } from './providers/net.js';
 import { addPrompt, listPrompts, promptFile, removePrompt, type PromptScope } from './prompts.js';
 import { createSkill, installSkills, skillPrompt, skillTarget, type Skill } from './skills.js';
@@ -152,9 +154,23 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
   },
   {
     name: 'auth',
-    description: 'register the OpenCode Go API key (stored in ~/.tessera-code/config.json)',
-    argHint: '[key]',
+    description: 'register an API key: /auth <key> for OpenCode Go, /auth <provider> <key> for another provider',
+    argHint: '[provider] [key]',
     async run(app, arg) {
+      const [first = '', second = ''] = arg.trim().split(/\s+/);
+      const def = providerDef(first);
+      if (def) {
+        if (!second) {
+          const k = providerKey(def.id);
+          return { output: def.local ? `${def.name} runs locally; no key needed.` : k ? `${def.name}: key ${maskKey(k.key)} from ${k.source}.` : `${def.name}: no key. Run /auth ${def.id} <key> (or set ${def.env[0]}).` };
+        }
+        const providers = { ...app.config.providers, [def.id]: { ...app.config.providers[def.id], apiKey: second } };
+        await saveGlobalSetting('providers', providers);
+        app.config.providers = providers;
+        setProviderSettings(providers);
+        const zdr = providerIsZdr(def.id) ? '' : ` ⚠ ${def.name} is not zero-data-retention unless your account has a ZDR agreement (then set "zdr": true for it).`;
+        return { output: `Saved the ${def.name} key ${maskKey(second)} to ~/.tessera-code/config.json. Pick a model: /model ${def.id}/…${zdr}` };
+      }
       const key = arg.trim();
       if (!key) {
         return {
@@ -324,33 +340,55 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
   },
   {
     name: 'model',
-    description: 'show or switch the model',
+    description: 'show or switch the model (OpenCode Go, or <provider>/<model> of a connected provider)',
     argHint: '[id]',
     async run(app, arg) {
-      if (!arg) return { output: `${app.agent.model.id} (${app.agent.model.format})` };
-      if (!app.catalog.some((m) => m.id === arg)) return { output: `Unknown model "${arg}". See /models.` };
-      if (!isZdr(arg)) return { output: `${arg} is not zero-data-retention and is not allowed.` };
+      const zdrNote = (m: ModelInfo) => (modelIsZdr(m) ? '' : `\n⚠ ${nonZdrWarning(m)}`);
+      if (!arg) return { output: `${app.agent.model.id} (${app.agent.model.format})${zdrNote(app.agent.model)}` };
+      const models = await pickableModels(app);
+      const local = splitModelId(arg).provider;
+      if (!models.some((m) => m.id === arg) && !providerDef(local)?.local) {
+        const { provider } = splitModelId(arg);
+        if (provider !== OPENCODE_GO && !providerKey(provider)) return { output: `No API key for ${providerDef(provider)?.name ?? provider}: /auth ${provider} <key> first. See /providers.` };
+        if (provider === OPENCODE_GO && app.catalog.some((m) => m.id === arg)) return { output: `${arg} is not zero-data-retention and is not allowed on OpenCode Go.` };
+        return { output: `Unknown model "${arg}". See /models.` };
+      }
       await app.setModel(arg);
-      return { output: `Model set to ${app.agent.model.id} (${app.agent.model.format})` };
+      return { output: `Model set to ${app.agent.model.id} (${app.agent.model.format})${zdrNote(app.agent.model)}` };
     },
     async suggest(app) {
-      return app.catalog
-        .filter((m) => isZdr(m.id))
-        .map((m) => ({
-          value: m.id,
-          hint: `${m.id === app.agent.model.id ? 'current · ' : ''}ctx ${formatTokens(m.context)} · $${m.cost.input}/$${m.cost.output} per 1M${m.reasoning ? ' · thinking' : ''}`,
-        }));
+      return (await pickableModels(app)).map((m) => ({
+        value: m.id,
+        hint: `${m.id === app.agent.model.id ? 'current · ' : ''}${modelIsZdr(m) ? '' : 'non-ZDR · '}ctx ${formatTokens(m.context)} · $${m.cost.input}/$${m.cost.output} per 1M${m.reasoning ? ' · thinking' : ''}`,
+      }));
     },
   },
   {
     name: 'models',
-    description: 'list available models',
+    description: 'list models you can use (OpenCode Go and connected providers)',
     async run(app) {
       return {
-        output: app.catalog
-          .filter((m) => isZdr(m.id))
-          .map((m) => `${m.id === app.agent.model.id ? '●' : ' '} ${m.id.padEnd(28)} ${m.format.padEnd(9)} ctx ${formatTokens(m.context).padEnd(7)} $${m.cost.input}/$${m.cost.output}`)
+        output: (await pickableModels(app))
+          .map((m) => `${m.id === app.agent.model.id ? '●' : ' '} ${m.id.padEnd(40)} ${(modelIsZdr(m) ? 'ZDR' : 'non-ZDR').padEnd(8)} ctx ${formatTokens(m.context).padEnd(7)} $${m.cost.input}/$${m.cost.output}`)
           .join('\n'),
+      };
+    },
+  },
+  {
+    name: 'providers',
+    description: 'model providers: which are connected, and how to add one',
+    async run(app) {
+      const counts = new Map<string, number>();
+      for (const m of await pickableModels(app)) counts.set(m.provider ?? OPENCODE_GO, (counts.get(m.provider ?? OPENCODE_GO) ?? 0) + 1);
+      const go = `${app.agent.apiKey ? '✓' : ' '} ${'opencode-go'.padEnd(14)} OpenCode Go (default)${''.padEnd(5)} ${app.agent.apiKey ? `key from ${app.apiKeySource}` : 'no key: /auth <key>'} · ZDR models only · ${counts.get(OPENCODE_GO) ?? 0} models`;
+      const rows = PROVIDERS.map((p) => {
+        const key = providerKey(p.id);
+        const ready = p.local || key;
+        const state = p.local ? `local (${providerSettings(p.id).baseURL ?? p.baseURL})` : key ? `key from ${key.source}` : `no key: /auth ${p.id} <key>`;
+        return `${ready ? '✓' : ' '} ${p.id.padEnd(14)} ${p.name.padEnd(26)} ${state} · ${providerIsZdr(p.id) ? 'ZDR' : 'non-ZDR'}${ready ? ` · ${counts.get(p.id) ?? 0} models` : ''}`;
+      });
+      return {
+        output: [go, ...rows, '', 'Models are named <provider>/<model> (e.g. /model openai/gpt-5). Non-ZDR providers may keep prompts; set "zdr": true under "providers" in config.json if your account has a ZDR agreement.'].join('\n'),
       };
     },
   },
@@ -636,13 +674,19 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
   },
   {
     name: 'mcp',
-    description: 'show MCP server status',
-    async run(app) {
-      await app.mcpReady;
-      if (!app.mcpStatus.length) return { output: 'No MCP servers configured. Add "mcpServers" to .tessera/settings.json or ~/.tessera-code/config.json.' };
-      return {
-        output: app.mcpStatus.map((s) => (s.ok ? `● ${s.name}: ${s.tools.length} tools (${s.tools.join(', ')})` : `✗ ${s.name}: ${s.error}`)).join('\n'),
-      };
+    description: 'show MCP server status; reload: re-read the config and reconnect (keeps the conversation)',
+    argHint: '[reload]',
+    async run(app, arg) {
+      const sub = arg.trim().toLowerCase();
+      if (sub && sub !== 'reload') return { output: 'Usage: /mcp · /mcp reload' };
+      const status = sub === 'reload' ? await app.reloadMcp() : (await app.mcpReady, app.mcpStatus);
+      if (!status.length) return { output: 'No MCP servers configured. Add "mcpServers" to .tessera/settings.json or ~/.tessera-code/config.json, then /mcp reload.' };
+      const lines = status.map((s) => (s.ok ? `● ${s.name}: ${s.tools.length} tools (${s.tools.join(', ')})` : `✗ ${s.name}: ${s.error}`));
+      if (sub === 'reload') lines.unshift(`Reloaded MCP servers: ${status.filter((s) => s.ok).length}/${status.length} connected. Their tools are available from the next message.`);
+      return { output: lines.join('\n') };
+    },
+    async suggest() {
+      return [{ value: 'reload', hint: 're-read config.json / .tessera/settings.json and reconnect' }];
     },
   },
   {
@@ -679,6 +723,13 @@ function parseCommandFile(name: string, raw: string): SlashCommand {
       return { prompt: body.includes('$ARGUMENTS') ? body.replaceAll('$ARGUMENTS', arg) : arg ? `${body}\n\n${arg}` : body };
     },
   };
+}
+
+/** Models that can be picked now: OpenCode Go's ZDR ones, connected providers' ones, and what local servers have. */
+async function pickableModels(app: App): Promise<ModelInfo[]> {
+  const local = (await Promise.all(PROVIDERS.filter((p) => p.local).map((p) => localModels(p.id)))).flat();
+  const seen = new Set<string>();
+  return [...usableModels(app.catalog), ...local].filter((m) => !seen.has(m.id) && seen.add(m.id));
 }
 
 /** Runs a skill directly: its instructions (and the arguments) become the prompt. */

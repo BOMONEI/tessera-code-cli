@@ -139,8 +139,8 @@ export function notify(message: string): void {
   process.stdout.write(`\x1b]9;${message.replace(/[\x00-\x1f]/g, ' ')}\x07\x07`);
 }
 
-// "/auth <key>": the key must not be shown on screen or kept in the prompt history.
-const AUTH_LINE = /^(\s*\/auth\s+)(\S+)/;
+// "/auth <key>" and "/auth <provider> <key>": the key must not be shown on screen or kept in the prompt history.
+const AUTH_LINE = /^(\s*\/auth\s+(?:(?:[a-z][a-z0-9-]*)\s+(?=\S))?)(\S+)/;
 
 /** True for a "/auth <key>" line. */
 export function hasSecret(text: string): boolean {

@@ -4,6 +4,7 @@ import { isZdr, type ModelInfo } from '../providers/catalog.js';
 import { withFallback, type FallbackState } from '../providers/fallback.js';
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import { recordSpend } from '../cost/ledger.js';
+import { OPENCODE_GO, splitModelId } from '../providers/registry.js';
 import { summarize, compactedHistory, type CompactProgress } from './compact.js';
 import type { ThinkingLevel } from '../config.js';
 
@@ -201,6 +202,8 @@ export class Agent {
 
   /** Fallback models actually used after the main one (ZDR only, main model excluded). */
   private fallbackChain(): ModelInfo[] {
+    // The fallback chain is OpenCode Go's: a model the user picked from another provider is not swapped silently.
+    if (this.model.provider) return [];
     return (this.opts.fallback?.models ?? []).filter((m) => m.id !== this.model.id && isZdr(m.id));
   }
 
@@ -228,6 +231,8 @@ export class Agent {
   }
 
   private spendOn(model: string, cost: number): void {
+    // The ledger estimates OpenCode Go's 5-hour/weekly/monthly caps: other providers bill on their own.
+    if (splitModelId(model).provider !== OPENCODE_GO) return;
     recordSpend(model, cost).catch(() => {}); // the ledger is best effort; never fail a turn over it
   }
 

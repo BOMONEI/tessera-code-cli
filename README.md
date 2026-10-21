@@ -112,6 +112,7 @@ Slash commands:
 | `/permissions` · `/cost` · `/mcp` · `/doctor` · `/init` · `/help` · `/exit` | allow rules, spend, MCP status, environment check, TESSERA.md |
 | `/auth [key]` | register the OpenCode Go API key (verified, saved to `~/.tessera-code/config.json`); without a key, show the one in use |
 | `/skills` · `/skill install\|new\|remove` · `/<skill> [task]` | list, add or run skills (see Skills) |
+| `/providers` · `/auth <provider> <key>` · `/model <provider>/<model>` | connect and use other model providers (see Other providers) |
 | `/agents [single\|subagents\|multi]` | single agent, subagents or parallel subagents (saved to config.json) |
 | `/prompt [global\|project <text> \| remove g1]` | add your own instructions for every project or this project (see Configuration) |
 | `/command` | keyboard shortcuts and what the bottom bar shows (`path ⎇ branch · ctx ▕██░░▏ · 5h ▕█░░░▏` / `model · thinking level · mode · mcp connected/configured`) |
@@ -157,6 +158,38 @@ Rendering uses [LibreOffice](https://www.libreoffice.org) (free), only when a do
 `TESSERA_SOFFICE` at its `soffice`. Each render runs headless with its own temporary LibreOffice profile, so it does
 not touch a LibreOffice window you have open. A model that cannot see images gets a message saying so (the default
 `mimo-v2.6-flash` can).
+
+## Other providers
+
+OpenCode Go is the default. Other providers are added with a key and used as `<provider>/<model>`:
+
+```
+/auth openai <key>          # saved under "providers" in ~/.tessera-code/config.json
+/model openai/gpt-5
+/model openrouter/anthropic/claude-sonnet-4.5
+/model ollama/qwen3:8b      # local servers need no key
+```
+
+`/providers` lists them with their state; `/models` lists every model you can pick now. Supported: OpenAI,
+Anthropic (Claude), OpenRouter, Command Code, Google Gemini, xAI, DeepSeek, Mistral, Cohere, Groq, Cerebras, Together,
+Fireworks, DeepInfra, Perplexity, Moonshot (Kimi), Z.ai (GLM), Alibaba (Qwen), NVIDIA NIM, Hugging Face, Baseten,
+OpenCode Zen, and locally Ollama and LM Studio. Model lists, limits and prices come from models.dev. A key can also come
+from the provider's usual environment variable (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, …).
+
+```json
+"providers": {
+  "openai":     { "apiKey": "sk-…" },
+  "openrouter": { "apiKey": "sk-or-…", "zdr": true },
+  "ollama":     { "baseURL": "http://127.0.0.1:11434/v1" }
+}
+```
+
+**Data retention.** OpenCode Go stays limited to its zero-data-retention models. Other providers may keep prompts and
+code under their own terms, so their models are marked **non-ZDR**: a warning when one is picked or used at startup,
+and `non-ZDR` in red on the bottom bar. `"zdr": true` declares a ZDR agreement on your account (for OpenRouter it also
+makes every request ask for ZDR endpoints only); local servers count as ZDR. Keys and addresses are read from your own
+config only, never from a project's `.tessera/settings.json`. The OpenCode Go fallback chain applies to Go models
+only, and the 5h gauge counts Go spend only.
 
 ## Skills
 

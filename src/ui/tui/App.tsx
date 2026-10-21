@@ -19,6 +19,7 @@ import { imagesFromPaths, readClipboardImage } from '../images.js';
 import { copyToClipboard } from '../clipboard.js';
 import type { ImageInput } from '../../agent/agent.js';
 import type { CompactProgress } from '../../agent/compact.js';
+import { modelIsZdr } from '../../providers/catalog.js';
 import type { SubagentProgress } from '../../tools/task.js';
 import type { WhatsNew } from '../../changelog.js';
 import { Input, caretOf } from './Input.js';
@@ -619,6 +620,7 @@ export function TuiApp({
       setMode(core.permissions.mode);
       setThinking(agent.thinking);
       setAgentsModeState(core.agentsMode());
+      setMcp(mcpCounts(core.mcpStatus)); // /mcp reload changes the servers
       forceRender((n) => n + 1);
       void core.saveState().catch(() => {});
       if (r.exit) return exit();
@@ -1030,6 +1032,7 @@ export function TuiApp({
           <Text dimColor wrap="truncate">
             {/* Keys and what each item means: /command. */}
             {agent.model.id}
+            {modelIsZdr(agent.model) ? null : <Text color="red"> non-ZDR</Text>}
             {agent.model.reasoning ? (
               <>
                 {' · '}
