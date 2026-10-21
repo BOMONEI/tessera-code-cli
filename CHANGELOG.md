@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.1 — 2026-10-21
+
+### Added
+- While the agent works, ↑ on an empty input takes back the newest waiting message (queued command or steering
+  message) to edit it, or cancel it with ctrl+c.
+
+### Fixed
+- Long pastes no longer fill the screen with copies of the input box: they show as `[Pasted text #n +L lines]` and
+  are sent in full; a long prompt scrolls inside the box (at most a third of the screen).
+- GLM-5.3 (thinking-only) no longer fails compaction, titles or thinking-off turns: it gets the lowest reasoning
+  level instead of "none", and other such models are recognized from the same error.
+
 ## 0.5.0 — 2026-10-21
 
 ### Added

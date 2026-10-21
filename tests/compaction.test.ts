@@ -169,6 +169,16 @@ describe('context limit', () => {
     expect(a.takeInterjections()).toEqual([]);
   });
 
+  it('takes back a message the turn has not read yet', () => {
+    const a = agent(300_000);
+    a.interject('first');
+    a.interject('second');
+    expect(a.withdrawInterjection('second')).toBe(true);
+    expect(a.withdrawInterjection('second')).toBe(false); // gone already
+    expect(a.takeInterjections()).toEqual(['first']);
+    expect(a.withdrawInterjection('first')).toBe(false); // delivered / taken: too late
+  });
+
   it('leaves a message unread when the turn had no further step', async () => {
     script.push('text');
     const a = agent(300_000);

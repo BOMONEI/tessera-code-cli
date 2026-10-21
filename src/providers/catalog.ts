@@ -202,3 +202,22 @@ export function isZdr(id: string): boolean {
   return ZDR_MODELS.has(id);
 }
 
+
+// Models that cannot turn reasoning off: they reject reasoning_effort "none" with a 400 ("GLM-5.3 is a thinking-only
+// model; disabling thinking … is not supported"). Known ones are listed; others are learned from that error.
+const THINKING_ONLY = [/(^|\/)glm-5\.3/i];
+const learnedThinkingOnly = new Set<string>();
+
+export function isThinkingOnly(id: string): boolean {
+  return learnedThinkingOnly.has(id) || THINKING_ONLY.some((r) => r.test(id));
+}
+
+export function markThinkingOnly(id: string): void {
+  learnedThinkingOnly.add(id);
+}
+
+/** The error a thinking-only model gives when asked to turn reasoning off. */
+export function isThinkingOnlyError(e: unknown): boolean {
+  const text = [(e as { message?: string })?.message, (e as { responseBody?: string })?.responseBody].filter(Boolean).join(' ');
+  return /thinking-only|disabling thinking|reasoning_effort\s*=?\s*'?none'?[^.]*not supported/i.test(text);
+}

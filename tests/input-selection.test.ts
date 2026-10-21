@@ -94,3 +94,25 @@ describe('copy on select hint', async () => {
     expect(copyOnSelect({ TERM_PROGRAM: 'Apple_Terminal' }, home).ok).toBe('warn');
   });
 });
+
+describe('long inputs scroll inside the box', () => {
+  it('draws at most maxLines lines around the caret', async () => {
+    const { lineWindow } = await import('../src/ui/tui/Input.js');
+    expect(lineWindow(5, 4, 10)).toEqual({ start: 0, end: 5 });
+    expect(lineWindow(100, 0, 10)).toEqual({ start: 0, end: 10 });
+    expect(lineWindow(100, 99, 10)).toEqual({ start: 90, end: 100 });
+    expect(lineWindow(100, 50, 10)).toEqual({ start: 45, end: 55 });
+    expect(lineWindow(100, 50, undefined)).toEqual({ start: 0, end: 100 });
+  });
+
+  it('counts the drawn rows and places the caret among them', async () => {
+    const { inputRows, visibleCaret, caretOf } = await import('../src/ui/tui/Input.js');
+    const value = Array.from({ length: 40 }, (_, i) => `line ${i}`).join('\n');
+    const end = value.length;
+    // 10 lines shown plus the "↑ 30 more lines" row; the caret is on the last drawn row.
+    expect(inputRows(value, end, 80, 10)).toBe(11);
+    expect(visibleCaret(value, end, 80, 10)).toEqual({ x: 'line 39'.length, row: 10 });
+    expect(visibleCaret(value, 3, 80, 10)).toEqual(caretOf(value, 3, 80)); // at the top nothing is hidden
+    expect(inputRows('short', 5, 80, 10)).toBe(1);
+  });
+});

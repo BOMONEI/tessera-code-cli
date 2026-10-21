@@ -3,7 +3,8 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { BASE_URL } from '../config.js';
-import { isAllowedModel, type ModelInfo } from './catalog.js';
+import { isAllowedModel, isThinkingOnly, isThinkingOnlyError, markThinkingOnly, type ModelInfo } from './catalog.js';
+import type { LanguageModelV4, LanguageModelV4CallOptions } from '@ai-sdk/provider';
 import { providerDef, providerKey, providerSettings, splitModelId } from './registry.js';
 import { apiFetch } from './net.js';
 
@@ -71,7 +72,37 @@ function otherProviderModel(info: ModelInfo): LanguageModel {
  */
 export function createModel(info: ModelInfo, opts: ProviderOptions): LanguageModel {
   if (!isAllowedModel(info)) throw new NonZdrModelError(info.id);
-  if (info.provider) return otherProviderModel(info);
+  return keepReasoningOn(info, info.provider ? otherProviderModel(info) : openCodeGoModel(info, opts));
+}
+
+/**
+ * Callers turn reasoning off ("none") for compaction, titles and ctrl+t. A thinking-only model rejects that, so it
+ * gets the lowest level instead; one not known yet is learned from its 400 and the call is retried once.
+ */
+function keepReasoningOn(info: ModelInfo, model: LanguageModel): LanguageModel {
+  if (!info.reasoning || typeof model === 'string') return model;
+  const target = model as LanguageModelV4;
+  const adjust = (o: LanguageModelV4CallOptions): LanguageModelV4CallOptions => (o.reasoning === 'none' && isThinkingOnly(info.id) ? { ...o, reasoning: 'low' } : o);
+  const call = async <T>(fn: (o: LanguageModelV4CallOptions) => PromiseLike<T>, o: LanguageModelV4CallOptions): Promise<T> => {
+    try {
+      return await fn(adjust(o));
+    } catch (e) {
+      if (o.reasoning !== 'none' || isThinkingOnly(info.id) || !isThinkingOnlyError(e)) throw e;
+      markThinkingOnly(info.id);
+      return fn(adjust(o));
+    }
+  };
+  return new Proxy(target, {
+    get(t, p, r) {
+      if (p === 'doStream') return (o: LanguageModelV4CallOptions) => call((x) => t.doStream(x), o);
+      if (p === 'doGenerate') return (o: LanguageModelV4CallOptions) => call((x) => t.doGenerate(x), o);
+      const v = Reflect.get(t, p, r);
+      return typeof v === 'function' ? v.bind(t) : v;
+    },
+  });
+}
+
+function openCodeGoModel(info: ModelInfo, opts: ProviderOptions): LanguageModel {
   const baseURL = opts.baseURL ?? BASE_URL;
   const headers = { 'x-opencode-session': opts.sessionId, 'user-agent': 'tessera-code' };
   switch (info.format) {

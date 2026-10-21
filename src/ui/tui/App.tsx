@@ -22,7 +22,7 @@ import type { CompactProgress } from '../../agent/compact.js';
 import { modelIsZdr } from '../../providers/catalog.js';
 import type { SubagentProgress } from '../../tools/task.js';
 import type { WhatsNew } from '../../changelog.js';
-import { Input, caretOf } from './Input.js';
+import { Input, inputRows as inputRowsOf, visibleCaret } from './Input.js';
 import { applyCompletion, complete, enterAction, type CommandInfo, type CompletionItem } from '../completion.js';
 import { VERSION } from '../../version.js';
 import { suggestFiles } from '../../agent/attachments.js';
@@ -74,6 +74,9 @@ function elapsedLabel(ms: number): string {
 
 // shift+tab cycle. 'dangerous' (never asks) is left out so it is never reached by accident: /mode, config or flag only.
 const MODES: PermissionMode[] = ['default', 'acceptEdits', 'plan', 'bypass'];
+/** A paste longer than this is shown as "[Pasted text #n +L lines]" in the input. */
+const PASTE_COLLAPSE_LINES = 5;
+const PASTE_COLLAPSE_CHARS = 1_500;
 /** Subagent lines shown under the spinner before "… N more". */
 const MAX_SUBAGENT_ROWS = 6;
 
@@ -345,6 +348,8 @@ export function TuiApp({
   const turnRef = useRef(false);
   const [interjecting, setInterjecting] = useState<string[]>([]);
   const queueRef = useRef<string[]>([...initialQueue]);
+  /** Messages waiting while the agent works, newest last: ↑ on an empty input takes the newest back for editing. */
+  const pendingOrder = useRef<Array<{ kind: 'interjection' | 'queued'; text: string }>>(initialQueue.map((text) => ({ kind: 'queued' as const, text })));
   const [queued, setQueued] = useState<string[]>(initialQueue);
   const slashCommand = /^\/(\S+)\s/.exec(input)?.[1];
   useEffect(() => {
@@ -368,10 +373,22 @@ export function TuiApp({
     imagesRef.current.set(++imageCount.current, image);
     return `[Image #${imageCount.current}]`;
   };
+  // Long pastes stay out of the input box: "[Pasted text #1 +42 lines]" stands in for them and is expanded on submit.
+  // Drawn in full, a paste taller than the terminal pushed the box's top off screen, and every chunk of the paste
+  // left a stale copy of the box behind (the top of the screen cannot be erased once it has scrolled away).
+  const pastesRef = useRef(new Map<number, string>());
+  const pasteCount = useRef(0);
   const transformPaste = (text: string): string => {
     const images = imagesFromPaths(text);
-    return images ? images.map((i) => attachImage(i)).join(' ') + ' ' : text;
+    if (images) return images.map((i) => attachImage(i)).join(' ') + ' ';
+    const lines = text.replace(/\r\n?/g, '\n').split('\n').length;
+    if (lines <= PASTE_COLLAPSE_LINES && text.length <= PASTE_COLLAPSE_CHARS) return text;
+    pastesRef.current.set(++pasteCount.current, text);
+    return `[Pasted text #${pasteCount.current} +${lines} lines] `;
   };
+  /** The prompt with "[Pasted text #n …]" replaced by what was pasted. */
+  const expandPastes = (text: string): string =>
+    text.replace(/\[Pasted text #(\d+) \+\d+ lines\]/g, (tag, n: string) => pastesRef.current.get(Number(n))?.replace(/\r\n?/g, '\n') ?? tag);
   // Terminals paste text themselves (cmd+v / ctrl+shift+v); ctrl+v reads an image from the clipboard.
   const inputRef = useRef({ input, cursor });
   inputRef.current = { input, cursor };
@@ -586,7 +603,10 @@ export function TuiApp({
         } else if (unread.length) {
           queueRef.current.push(...unread);
           setQueued(queueRef.current.map(redactSecret));
+          // They wait in the queue now: ↑ takes them back from there.
+          for (const p of pendingOrder.current) if (p.kind === 'interjection' && unread.includes(p.text)) p.kind = 'queued';
         }
+        if (controller.signal.aborted) pendingOrder.current = pendingOrder.current.filter((p) => p.kind === 'queued');
         endBusy();
         const seconds = (Date.now() - started) / 1000;
         const after = core.config.notifyAfterSeconds;
@@ -641,13 +661,14 @@ export function TuiApp({
 
   const submit = useCallback(
     async (raw: string) => {
-      const text = raw.trim();
+      const text = expandPastes(raw).trim();
       setInput('');
       if (!text) return;
       if (busyRef.current) {
         if (turnRef.current && !/^[/!]/.test(text) && !/\[Image #\d+\]/.test(text)) {
           // Typed while the agent works: steer the running turn (delivered after the current step).
           core.agent.interject(text);
+          pendingOrder.current.push({ kind: 'interjection', text });
           setInterjecting((list) => [...list, text]);
           historyRef.current = [text, ...historyRef.current.filter((h) => h !== text)];
           void appendInputHistory(core.ctx.cwd, text);
@@ -655,6 +676,7 @@ export function TuiApp({
         }
         // Commands and shell lines wait for the turn to end.
         queueRef.current.push(text);
+        pendingOrder.current.push({ kind: 'queued', text });
         setQueued(queueRef.current.map(redactSecret));
         return;
       }
@@ -723,6 +745,32 @@ export function TuiApp({
   }, []);
 
   /** Returns the new input value, so the Input can keep building on it within the same batch of keys. */
+  /**
+   * ↑ on an empty input while the agent works: the newest waiting message comes back into the input and leaves the
+   * queue, to be edited and sent again, or cleared with ctrl+c. A message the turn has already read cannot be taken
+   * back; the next older one is tried.
+   */
+  const takeBackPending = (): string | undefined => {
+    while (pendingOrder.current.length) {
+      const last = pendingOrder.current.pop()!;
+      if (last.kind === 'queued') {
+        const i = queueRef.current.lastIndexOf(last.text);
+        if (i < 0) continue; // already ran
+        queueRef.current.splice(i, 1);
+        setQueued(queueRef.current.map(redactSecret));
+        return last.text;
+      }
+      if (core.agent.withdrawInterjection(last.text)) {
+        setInterjecting((list) => {
+          const i = list.lastIndexOf(last.text);
+          return i < 0 ? list : [...list.slice(0, i), ...list.slice(i + 1)];
+        });
+        return last.text;
+      }
+    }
+    return undefined;
+  };
+
   const browseHistory = (direction: 'older' | 'newer'): string | undefined => {
     const h = historyRef.current;
     let next: string | undefined;
@@ -814,8 +862,11 @@ export function TuiApp({
   });
 
   // Keep the live area shorter than the screen (input box, status, footer, menu, picker and queue take the rest).
-  const inputRows = visualRows(input || ' ', size.columns - 7); // border, padding and prompt
-  const queuedRows = [...queued, ...interjecting].reduce((n, q) => n + visualRows(`↳ will be sent after the current step: ${q}`, size.columns), 0);
+  // A long prompt scrolls inside the box: at most a third of the screen (see lineWindow in Input.tsx).
+  const inputMaxLines = Math.max(3, Math.floor(size.rows / 3));
+  const inputRows = inputRowsOf(input || ' ', cursor, size.columns - 7, inputMaxLines); // border, padding and prompt
+  const queuedRows =
+    [...queued, ...interjecting].reduce((n, q) => n + visualRows(`↳ will be sent after the current step: ${q}`, size.columns), 0) + (queued.length + interjecting.length ? 1 : 0);
   const pickerRows = choice ? Math.min(choice.options.length, 10) + 5 : 0;
   const MENU_ROWS = 8;
   const menuStart = menu ? Math.min(Math.max(0, selected - MENU_ROWS + 1), Math.max(0, menu.items.length - MENU_ROWS)) : 0;
@@ -846,7 +897,7 @@ export function TuiApp({
   const promptWidth = 2; // "› "
   const innerLeft = 2 + promptWidth; // border + padding
   const caretActive = !overlay && inputBox.hasMeasured && frame.hasMeasured;
-  const caret = caretActive ? caretOf(input, cursor, inputBox.width - innerLeft - 2) : undefined;
+  const caret = caretActive ? visibleCaret(input, cursor, inputBox.width - innerLeft - 2, inputMaxLines) : undefined;
   setCursorPosition(caret ? { x: inputBox.left + innerLeft + caret.x, y: frame.top + inputBox.top + 1 + caret.row } : undefined);
 
   return (
@@ -922,6 +973,7 @@ export function TuiApp({
             ⧗ queued: {q}
           </Text>
         ))}
+        {queued.length + interjecting.length ? <Text dimColor italic>{'  ↑ on an empty input takes the last one back (edit, or ctrl+c to cancel it)'}</Text> : null}
         {busy && !pending ? (
           <Box marginTop={1}>
             <Text color="cyan">
@@ -971,7 +1023,13 @@ export function TuiApp({
                   historyPos.current = -1;
                 }}
                 onSubmit={(v) => void submit(v)}
-                onHistory={(d) => (busy ? undefined : browseHistory(d))}
+                onHistory={(d) => {
+                  if (!busy) return browseHistory(d);
+                  if (d !== 'older' || input) return undefined;
+                  const back = takeBackPending();
+                  if (back !== undefined) setInput(back);
+                  return back;
+                }}
                 focus={!overlay}
                 menuOpen={menuOpen}
                 realCursor={Boolean(caret)}
@@ -979,6 +1037,7 @@ export function TuiApp({
                 onImagePaste={pasteImage}
                 width={inputBox.hasMeasured ? inputBox.width - innerLeft - 2 : size.columns - 6}
                 mask={maskSecretInput}
+                maxLines={inputMaxLines}
                 onCopy={(text) => void copyToClipboard(text).then((via) => (via ? showFlash('✓ clipboard copied!') : showFlash('✗ clipboard unavailable', false)))}
                 placeholder={busy ? (turnRef.current ? 'Type to steer the agent (delivered after the current step)' : '') : 'Ask anything · @ files · ! shell · / commands · \\⏎ newline'}
               />

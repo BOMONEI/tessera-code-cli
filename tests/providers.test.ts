@@ -152,3 +152,55 @@ describe('/auth <provider> <key>', () => {
     expect((await loadConfig(cwd, { trusted: true })).providers.openai?.baseURL).toBeUndefined();
   });
 });
+
+describe('thinking-only models', () => {
+  let server: Server;
+  let base = '';
+  const efforts: Array<string | undefined> = [];
+  beforeAll(async () => {
+    server = createServer((req, res) => {
+      let raw = '';
+      req.on('data', (d) => (raw += d));
+      req.on('end', () => {
+        const body = JSON.parse(raw) as { model: string; reasoning_effort?: string };
+        efforts.push(body.reasoning_effort);
+        if (body.reasoning_effort === 'none' && body.model !== 'plain') {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ error: { message: `Upstream request failed: [400] ${body.model} is a thinking-only model; disabling thinking (reasoning_effort='none') is not supported.` } }));
+          return;
+        }
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ id: 'x', object: 'chat.completion', created: 0, model: body.model, choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1 } }));
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`;
+  });
+  afterAll(() => server.close());
+  const thinker = (id: string) => ({ ...findModel([], `ollama/${id}`), reasoning: true });
+
+  it('a known one (GLM-5.3) gets "low" when reasoning is turned off', async () => {
+    setProviderSettings({ ollama: { baseURL: base } });
+    efforts.length = 0;
+    const r = await generateText({ model: createModel(thinker('glm-5.3-flash'), { apiKey: '', sessionId: 's' }), prompt: 'hi', reasoning: 'none' });
+    expect(r.text).toBe('ok');
+    expect(efforts).toEqual(['low']);
+  });
+
+  it('an unknown one is learned from its 400, retried once, and gets "low" from then on', async () => {
+    setProviderSettings({ ollama: { baseURL: base } });
+    efforts.length = 0;
+    const model = createModel(thinker('new-thinker'), { apiKey: '', sessionId: 's' });
+    expect((await generateText({ model, prompt: 'hi', reasoning: 'none', maxRetries: 0 })).text).toBe('ok');
+    expect(efforts).toEqual(['none', 'low']);
+    await generateText({ model, prompt: 'hi', reasoning: 'none', maxRetries: 0 });
+    expect(efforts).toEqual(['none', 'low', 'low']);
+  });
+
+  it('other models still get "none", and other errors are not retried', async () => {
+    setProviderSettings({ ollama: { baseURL: base } });
+    efforts.length = 0;
+    await generateText({ model: createModel(thinker('plain'), { apiKey: '', sessionId: 's' }), prompt: 'hi', reasoning: 'none' });
+    expect(efforts).toEqual(['none']);
+  });
+});

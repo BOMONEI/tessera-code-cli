@@ -246,6 +246,14 @@ export class Agent {
     this.interjections.push(text);
   }
 
+  /** Takes back a message sent with interject() that the turn has not read yet; false once it was delivered. */
+  withdrawInterjection(text: string): boolean {
+    const i = this.interjections.lastIndexOf(text);
+    if (i < 0) return false;
+    this.interjections.splice(i, 1);
+    return true;
+  }
+
   /** Interjections the turn ended without reading (it was already answering); run them as the next prompts. */
   takeInterjections(): string[] {
     return this.interjections.splice(0);

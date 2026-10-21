@@ -57,6 +57,40 @@ function folded(line: string, width: number | undefined): { text: string; at: (i
   return { text, at: (i) => i + breaks.filter((b) => b <= i).length };
 }
 
+/**
+ * Which lines of a long input are drawn: at most `maxLines`, keeping the caret's line in view. Lines above and below
+ * are summarized by one "N more lines" row each. A box taller than the terminal cannot be redrawn cleanly, so a long
+ * input scrolls inside the box instead of growing past the screen.
+ */
+export function lineWindow(lineCount: number, cursorLine: number, maxLines: number | undefined): { start: number; end: number } {
+  if (!maxLines || lineCount <= maxLines) return { start: 0, end: lineCount };
+  const start = Math.min(Math.max(0, cursorLine - Math.floor(maxLines / 2)), lineCount - maxLines);
+  return { start, end: start + maxLines };
+}
+
+/** Rows a line takes when wrapped at `width` (same rule as wrapOffsets and caretOf). */
+function rowsOf(line: string, width: number): number {
+  return wrapOffsets(line, width).length + 1;
+}
+
+/** Rows the input box's text takes on screen (window markers included). */
+export function inputRows(value: string, cursor: number, width: number, maxLines?: number): number {
+  const { line, lines } = position(value, cursor);
+  const { start, end } = lineWindow(lines.length, line, maxLines);
+  const shown = lines.slice(start, end).reduce((n, l) => n + rowsOf(l, width), 0);
+  return shown + (start > 0 ? 1 : 0) + (end < lines.length ? 1 : 0);
+}
+
+/** caretOf for a windowed input: the caret's row among the rows actually drawn. */
+export function visibleCaret(value: string, cursor: number, width: number, maxLines?: number): { x: number; row: number } {
+  const caret = caretOf(value, cursor, width);
+  const { line, lines } = position(value, cursor);
+  const { start } = lineWindow(lines.length, line, maxLines);
+  if (!start) return caret;
+  const hidden = lines.slice(0, start).reduce((n, l) => n + rowsOf(l, Math.max(1, width)), 0);
+  return { x: caret.x, row: caret.row - hidden + 1 }; // + the "more lines" row on top
+}
+
 /** The selected range [start, end) between the anchor and the caret, or undefined when nothing is selected. */
 export function selectionRange(anchor: number | undefined, cursor: number): { start: number; end: number } | undefined {
   if (anchor === undefined || anchor === cursor) return undefined;
@@ -83,6 +117,7 @@ export function Input({
   onCopy,
   width,
   mask,
+  maxLines,
 }: {
   value: string;
   cursor: number;
@@ -96,6 +131,8 @@ export function Input({
   placeholder?: string;
   /** The terminal's own cursor is placed at the caret (for IME composition), so no drawn cursor is needed. */
   realCursor?: boolean;
+  /** At most this many lines are drawn (around the caret); see lineWindow. */
+  maxLines?: number;
   /** Drawn instead of the value; must keep its length. */
   mask?: (value: string) => string;
   /** Rewrites pasted text before it is inserted (e.g. dropped image paths become "[Image #1]"). */
@@ -279,17 +316,23 @@ export function Input({
   // A mask keeps the length (the caret and selection index the real value), e.g. a typed API key drawn as dots.
   const { line: cursorLine, col, lines } = position(mask ? mask(value) : value, at);
   const sel = focus ? selectionRange(anchor, at) : undefined;
+  const win = lineWindow(lines.length, cursorLine, maxLines);
+  const above = win.start > 0 ? <Text dimColor>{`↑ ${win.start} more line${win.start === 1 ? '' : 's'}`}</Text> : null;
+  const below = win.end < lines.length ? <Text dimColor>{`↓ ${lines.length - win.end} more line${lines.length - win.end === 1 ? '' : 's'}`}</Text> : null;
+  const shown = (i: number) => i >= win.start && i < win.end;
   if (sel) {
     // Selected text drawn inverted; the caret is the terminal's own (or the selection edge).
     let offset = 0;
     return (
       <Box flexDirection="column">
+        {above}
         {lines.map((l, i) => {
           const from = Math.max(0, sel.start - offset);
           const to = Math.min(l.length, sel.end - offset);
           // A selected line break shows as one inverted cell at the end of the line.
           const breakSelected = i < lines.length - 1 && sel.start <= offset + l.length && sel.end > offset + l.length;
           offset += l.length + 1;
+          if (!shown(i)) return null;
           const f = folded(l, width);
           return (
             <Text key={i} wrap="hard">
@@ -306,12 +349,15 @@ export function Input({
             </Text>
           );
         })}
+        {below}
       </Box>
     );
   }
   return (
     <Box flexDirection="column">
+      {above}
       {lines.map((l, i) => {
+        if (!shown(i)) return null;
         const f = folded(l, width);
         return focus && !realCursor && i === cursorLine ? (
           <Text key={i} wrap="hard">
@@ -325,6 +371,7 @@ export function Input({
           </Text>
         );
       })}
+      {below}
     </Box>
   );
 }
