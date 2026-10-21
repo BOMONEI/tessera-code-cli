@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { connectMcp } from '../src/mcp.js';
+import { connectMcp, localCommand } from '../src/mcp.js';
 
 // A minimal stdio MCP server with one tool; DELAY_MS holds back its answer to "initialize" (a slow server).
 const SERVER = `
@@ -46,6 +46,26 @@ describe('connectMcp', () => {
       expect(progress.at(-1)!.status).toEqual(['fast:ok', 'slow:ok', 'dead:fail']);
       expect(progress).toHaveLength(3);
       expect(Object.keys(conn.tools).sort()).toEqual(['mcp__fast__ping', 'mcp__slow__ping']);
+    } finally {
+      await conn.close();
+    }
+  }, 20_000);
+});
+
+describe('local server config', () => {
+  it('accepts opencode\'s form: command as an array, environment instead of env', () => {
+    expect(localCommand({ command: ['npx', '-y', 'some-mcp'], environment: { A: '1' } })).toEqual({ command: 'npx', args: ['-y', 'some-mcp'], env: { A: '1' } });
+    expect(localCommand({ command: 'npx', args: ['-y', 'some-mcp'], env: { B: '2' } })).toEqual({ command: 'npx', args: ['-y', 'some-mcp'], env: { B: '2' } });
+    expect(() => localCommand({ command: [] })).toThrow(/no "command"/);
+  });
+
+  it('connects a server configured the opencode way', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tessera-mcp-oc-'));
+    const script = join(dir, 'server.cjs');
+    writeFileSync(script, SERVER);
+    const conn = await connectMcp({ oc: { type: 'local', command: [process.execPath, script], environment: { DELAY_MS: '0' }, enabled: true } as never }, dir);
+    try {
+      expect(conn.status).toEqual([{ name: 'oc', ok: true, tools: ['ping'] }]);
     } finally {
       await conn.close();
     }

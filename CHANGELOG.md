@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.3 — 2026-10-21
+
+### Fixed
+- Local MCP servers in opencode's form (`"command": ["npx", "-y", "pkg"]`, `"environment"`) now start; before, only
+  `"command": "npx", "args": [...]` worked, so such servers (e.g. an MSSQL MCP server) never connected.
+
 ## 0.4.2 — 2026-10-16
 
 ### Fixed

@@ -63,7 +63,7 @@ const PERMISSION_MODES: readonly PermissionMode[] = ['default', 'acceptEdits', '
  * otherwise implied by command/url; `"enabled": false` turns a server off, including a built-in one.
  */
 export type McpServerConfig = { type?: 'local' | 'remote'; enabled?: boolean } & (
-  | { command: string; args?: string[]; env?: Record<string, string> }
+  | { command: string | string[]; args?: string[]; env?: Record<string, string>; environment?: Record<string, string> }
   | { url: string; headers?: Record<string, string> }
 );
 
@@ -142,7 +142,7 @@ export async function projectTrust(cwd: string): Promise<ProjectTrust> {
   const lines: string[] = [];
   for (const s of skills) lines.push(`skill "${s.name}" (${s.source === 'project' ? '.tessera' : '.claude'}/skills): ${s.description.replace(/\s+/g, ' ').slice(0, 100)}`);
   const mcp = (project.mcpServers ?? {}) as Record<string, McpServerConfig>;
-  for (const [name, cfg] of Object.entries(mcp)) lines.push(`MCP server "${name}": ${'url' in cfg ? cfg.url : [cfg.command, ...(cfg.args ?? [])].join(' ')}`);
+  for (const [name, cfg] of Object.entries(mcp)) lines.push(`MCP server "${name}": ${'url' in cfg ? cfg.url : [cfg.command, ...(cfg.args ?? [])].flat().join(' ')}`);
   for (const [event, hooks] of Object.entries((project.hooks ?? {}) as HooksConfig)) {
     for (const h of hooks ?? []) lines.push(`${event} hook${h.matcher ? ` (${h.matcher})` : ''}: ${h.command}`);
   }

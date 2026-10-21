@@ -23,6 +23,19 @@ function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
   return Promise.race([p, new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${what} timed out after ${ms}ms`)), ms))]);
 }
 
+/**
+ * A local server's command line, from tessera's form ({ command: "npx", args: [...], env }) or opencode's
+ * ({ command: ["npx", ...], environment }), so a config copied from opencode works as it is.
+ */
+export function localCommand(cfg: Record<string, unknown>): { command: string; args: string[]; env: Record<string, string> } {
+  const raw = cfg.command;
+  const parts = Array.isArray(raw) ? raw.map(String) : typeof raw === 'string' ? [raw] : [];
+  if (!parts[0]) throw new Error('no "command" to run');
+  const args = [...parts.slice(1), ...(Array.isArray(cfg.args) ? cfg.args.map(String) : [])];
+  const env = { ...((cfg.environment ?? {}) as Record<string, string>), ...((cfg.env ?? {}) as Record<string, string>) };
+  return { command: parts[0], args, env };
+}
+
 /** Tool names are namespaced as mcp__<server>__<tool> and sanitized to provider-safe characters. */
 export function mcpToolName(server: string, tool: string): string {
   return `mcp__${server}__${tool}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
@@ -56,7 +69,10 @@ export async function connectMcp(
         const transport =
           'url' in cfg
             ? { type: 'http' as const, url: cfg.url, headers: cfg.headers }
-            : new StdioMCPTransport({ command: cfg.command, args: cfg.args, env: { ...(process.env as Record<string, string>), ...cfg.env }, cwd, stderr: 'ignore' });
+            : (() => {
+                const local = localCommand(cfg as Record<string, unknown>);
+                return new StdioMCPTransport({ command: local.command, args: local.args, env: { ...(process.env as Record<string, string>), ...local.env }, cwd, stderr: 'ignore' });
+              })();
         const client = await withTimeout(createMCPClient({ transport }), CONNECT_TIMEOUT_MS, `MCP server "${name}"`);
         clients.push(client);
         const serverTools = await withTimeout(client.tools(), CONNECT_TIMEOUT_MS, `Listing tools of "${name}"`);
