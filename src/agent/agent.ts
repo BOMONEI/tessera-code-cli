@@ -20,8 +20,9 @@ export type AgentEvent =
    * Also sent when a turn is interrupted or fails (finishReason 'interrupted' / 'error'), with what it used so far.
    * `elapsedMs`: whole turn; `firstOutputMs`: until the model's first output (text, thinking or tool call);
    * `outputMs`: time the model spent writing, summed over the steps (output tokens / outputMs = generation speed).
+   * `discarded`: interrupted before the model answered anything; the prompt was left out of the history.
    */
-  | { type: 'turn-finish'; usage: Usage; finishReason: string; elapsedMs: number; firstOutputMs?: number; outputMs?: number }
+  | { type: 'turn-finish'; usage: Usage; finishReason: string; elapsedMs: number; firstOutputMs?: number; outputMs?: number; discarded?: boolean }
   | { type: 'compacted'; before: number; summary: string }
   | { type: 'fallback'; from: string; to: string; reason: string }
   | { type: 'info'; text: string }
@@ -519,6 +520,8 @@ export class Agent {
     }
     while (notices.length) yield notices.shift()!;
     this.turnUsage = undefined;
+    // Interrupted before any output: the turn never happened (the UI hands the prompt back for editing).
+    const discarded = !finished && !!signal?.aborted && firstOutputAt === undefined && completed.length === 0;
     if (!finished) {
       yield {
         type: 'turn-finish',
@@ -527,8 +530,10 @@ export class Agent {
         elapsedMs: performance.now() - startedAt,
         firstOutputMs: firstOutputAt === undefined ? undefined : firstOutputAt - startedAt,
         outputMs,
+        ...(discarded ? { discarded } : {}),
       };
     }
+    if (discarded) return;
 
     if (finished && !failed) {
       // Completed normally (an interrupt arriving after the final step does not discard the answer).

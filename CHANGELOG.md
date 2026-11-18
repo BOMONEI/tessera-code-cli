@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.1 — 2026-11-18
+
+### Changed
+- Diffs of `edit` sit on a shaded panel across the full width, with stronger added/removed backgrounds, so the
+  changed code stands out from the conversation.
+- A message cancelled (`esc`) before the model answered anything leaves no trace: it is removed from the conversation
+  (on screen and in the model's history) and put back in the input to edit or send again. Once any answer arrived,
+  the interrupted turn stays as before.
+
 ## 0.6.0 — 2026-11-18
 
 ### Added

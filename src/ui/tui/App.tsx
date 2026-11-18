@@ -449,7 +449,11 @@ export function TuiApp({
   // Diffs arrive from inside tool execution; show them right after the tool line.
   const pendingDiffs = useRef<Array<{ path: string; diff: string }>>([]);
 
-  const push = useCallback((item: NewHistoryItem) => setItems((prev) => [...prev, { ...item, id: nextId++ } as HistoryItem]), []);
+  const push = useCallback((item: NewHistoryItem) => {
+    const id = nextId++;
+    setItems((prev) => [...prev, { ...item, id } as HistoryItem]);
+    return id;
+  }, []);
 
   // Thinking of the current step, printed (folded) once the model moves on to text or a tool call.
   const reasoningRef = useRef<{ text: string; since: number } | undefined>(undefined);
@@ -542,13 +546,18 @@ export function TuiApp({
     setBusySince(undefined);
   };
 
+  /**
+   * Runs one turn; `origin` is the prompt's history line and its text as typed. Interrupted before the model answered
+   * anything, the turn leaves no trace: its lines are removed and the text goes back to the input (returns true).
+   */
   const runTurn = useCallback(
-    async (prompt: string, images: ImageInput[] = []) => {
+    async (prompt: string, images: ImageInput[] = [], origin?: { id: number; text: string }): Promise<boolean> => {
       const controller = startBusy('Thinking');
       turnRef.current = true;
       const started = Date.now();
       const labels = new Map<string, string>();
       let failed = false;
+      let discarded = false;
       try {
         for await (const ev of core.run(prompt, controller.signal, images)) {
           switch (ev.type) {
@@ -605,6 +614,10 @@ export function TuiApp({
               push({ kind: 'info', text: `(context compacted from ${formatTokens(ev.before)} tokens)` });
               break;
             case 'turn-finish':
+              if (ev.discarded && origin) {
+                discarded = true;
+                break;
+              }
               flushReasoning();
               flushStream();
               push({ kind: 'info', text: `${formatTiming(ev)} · ${formatUsage(ev.usage)}` });
@@ -617,7 +630,7 @@ export function TuiApp({
               break;
           }
         }
-        if (controller.signal.aborted) {
+        if (controller.signal.aborted && !discarded) {
           flushStream();
           push({ kind: 'info', text: 'Interrupted.' });
         }
@@ -632,7 +645,11 @@ export function TuiApp({
         // Messages the turn ended without reading (it was already writing its answer) run next.
         const unread = core.agent.takeInterjections();
         setInterjecting([]);
-        if (unread.length && controller.signal.aborted) {
+        if (discarded && origin) {
+          setItems((prev) => prev.filter((i) => i.id < origin.id));
+          setInput([origin.text, inputRef.current.input, ...unread].filter(Boolean).join('\n'));
+          showFlash('Cancelled: the message is back in the input');
+        } else if (unread.length && controller.signal.aborted) {
           // Interrupted: hand the unsent messages back for editing instead of starting a new turn on its own.
           setInput([inputRef.current.input, ...unread].filter(Boolean).join('\n'));
         } else if (unread.length) {
@@ -649,8 +666,9 @@ export function TuiApp({
         setSpend(await spendWindows());
         setBranch(await gitBranch(core.ctx.cwd)); // the agent may have switched branches
       }
+      return discarded;
     },
-    [core, flushReasoning, flushStream, push, scheduleRender],
+    [core, flushReasoning, flushStream, push, scheduleRender, setInput, showFlash],
   );
 
   /** "!cmd": runs in the shell directly (the user typed it, so no approval); the output goes to the next prompt. */
@@ -724,7 +742,8 @@ export function TuiApp({
         historyRef.current = [text, ...historyRef.current.filter((h) => h !== text)];
       }
       historyPos.current = -1;
-      push({ kind: 'user', text: redactSecret(text) });
+      const userItem = push({ kind: 'user', text: redactSecret(text) });
+      let restored = '';
       if (text.startsWith('!')) {
         await runShell(text.slice(1).trim());
       } else if (text.startsWith('/')) {
@@ -752,10 +771,14 @@ export function TuiApp({
         }
         const missing = tags.filter((n) => !imagesRef.current.has(n));
         if (missing.length) push({ kind: 'info', text: `${missing.map((n) => `[Image #${n}]`).join(' ')} is no longer attached (recalled from history); paste the image again to send it.` });
-        await runTurn(text, takeImages(text));
+        const attached = [...imagesRef.current].filter(([n]) => tags.includes(n));
+        if (await runTurn(text, takeImages(text), { id: userItem, text: raw.trim() })) {
+          restored = raw;
+          for (const [n, image] of attached) imagesRef.current.set(n, image); // back with their tags in the input
+        }
       }
       // Images whose tags were deleted or never sent are dropped (each can be megabytes).
-      const referenced = new Set([...queueRef.current, input].flatMap((q) => [...q.matchAll(/\[Image #(\d+)\]/g)].map((m) => Number(m[1]))));
+      const referenced = new Set([...queueRef.current, input, restored].flatMap((q) => [...q.matchAll(/\[Image #(\d+)\]/g)].map((m) => Number(m[1]))));
       for (const n of imagesRef.current.keys()) if (!referenced.has(n)) imagesRef.current.delete(n);
       await drainRef.current();
     },

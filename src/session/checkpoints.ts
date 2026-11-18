@@ -57,6 +57,11 @@ export class Checkpoints {
     }
   }
 
+  /** Forgets the turn begun last (it was interrupted before doing anything): no checkpoint to rewind to. */
+  discard(): void {
+    this.current = undefined;
+  }
+
   async end(): Promise<void> {
     const cp = this.current;
     this.current = undefined;

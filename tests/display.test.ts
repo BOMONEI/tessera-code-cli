@@ -31,12 +31,13 @@ describe('colorDiff', () => {
     try {
       const raw = colorDiff('@@ -1 +1 @@\n-old\n+새 줄\n same', 20);
       const lines = strip(raw).split('\n');
-      expect(lines[0]).toBe('@@ -1 +1 @@');
+      expect(lines[0]).toBe('@@ -1 +1 @@'.padEnd(20)); // the hunk and context lines sit on the shaded panel too
       expect(lines[1]).toBe('1 -old'.padEnd(20));
       expect(lines[2]).toBe('1 +새 줄' + ' '.repeat(12)); // 8 columns: Korean syllables count two
-      expect(lines[3]).toBe('2  same');
-      expect(raw).toContain('\x1b[48;2;22;58;34m'); // added: green band
-      expect(raw).toContain('\x1b[48;2;72;28;32m'); // removed: red band
+      expect(lines[3]).toBe('2  same'.padEnd(20));
+      expect(raw).toContain('\x1b[48;2;28;80;44m'); // added: green band
+      expect(raw).toContain('\x1b[48;2;98;34;42m'); // removed: red band
+      expect(raw).toContain('\x1b[48;2;40;42;48m'); // context: panel
     } finally {
       if (prev === undefined) delete process.env.COLORTERM;
       else process.env.COLORTERM = prev;

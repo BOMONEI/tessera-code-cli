@@ -446,6 +446,7 @@ export async function createApp(opts: AppOptions): Promise<App> {
         for await (const ev of agent.run(prompt, signal, images)) {
           // A compaction before the turn replaces the history the checkpoint points to.
           if (ev.type === 'compacted' && !started) checkpoints.begin(prompt, agent.messages);
+          else if (ev.type === 'turn-finish' && ev.discarded) checkpoints.discard();
           else if (ev.type !== 'info') started = true;
           // Timings cover the whole turn as the user saw it, including the MCP wait.
           yield ev.type === 'turn-finish'

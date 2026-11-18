@@ -33,15 +33,21 @@ export function toolPreview(output: unknown, maxLines = 4): string {
   return shown.join('\n');
 }
 
-// Truecolor backgrounds for changed lines (like Claude Code / opencode): a tinted band that reads on dark and light
-// themes, with a brighter sign column. Without truecolor the 16-color fallback keeps green/red text.
-const ADDED = { bg: '\x1b[48;2;22;58;34m', sign: '\x1b[38;2;95;215;120m' };
-const REMOVED = { bg: '\x1b[48;2;72;28;32m', sign: '\x1b[38;2;240;110;120m' };
+// Truecolor backgrounds (like Claude Code / opencode): the whole diff sits on a shaded panel so it stands apart from
+// the conversation, and changed lines on a tinted band with a brighter sign column. Without truecolor the 16-color
+// fallback keeps green/red text.
+const PANEL = '\x1b[48;2;40;42;48m';
+const ADDED = { bg: '\x1b[48;2;28;80;44m', sign: '\x1b[38;2;110;225;135m' };
+const REMOVED = { bg: '\x1b[48;2;98;34;42m', sign: '\x1b[38;2;250;120;130m' };
+
+const padTo = (text: string, width: number | undefined) => (width ? ' '.repeat(Math.max(0, width - stringWidth(text))) : '');
 
 function band(gutter: string, line: string, c: typeof ADDED, width: number | undefined): string {
-  const pad = width ? ' '.repeat(Math.max(0, width - stringWidth(gutter + line))) : '';
-  return `${c.bg}${c.sign}${gutter}${line[0]}\x1b[39m${line.slice(1)}${pad}\x1b[0m`;
+  return `${c.bg}${c.sign}${gutter}${line[0]}\x1b[39m${line.slice(1)}${padTo(gutter + line, width)}\x1b[0m`;
 }
+
+/** A context or hunk line on the panel background, `styled` being its text with colors applied. */
+const panel = (text: string, styled: string, width: number | undefined) => `${PANEL}${styled}${padTo(text, width)}\x1b[0m`;
 
 const HUNK = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
 
@@ -73,7 +79,7 @@ export function diffLineNumbers(lines: string[]): string[] {
   });
 }
 
-/** Colors a unified diff with line numbers; with `width`, changed lines get a full-width background band. */
+/** Colors a unified diff with line numbers; with `width`, every line is padded so the backgrounds form full-width bands. */
 export function colorDiff(diff: string, width?: number): string {
   const truecolor = /truecolor|24bit/i.test(process.env.COLORTERM ?? '');
   const lines = diff.split('\n');
@@ -82,11 +88,11 @@ export function colorDiff(diff: string, width?: number): string {
     .map((raw, i) => {
       const l = raw.replace(/\t/g, '    ');
       const gutter = numbers[i] ? `${numbers[i]} ` : '';
-      if (l.startsWith('@@')) return cyan(l);
+      if (l.startsWith('@@')) return truecolor ? panel(l, cyan(l), width) : cyan(l);
       if (!gutter) return dim(l); // file headers ("--- a"), "\ No newline at end of file"
       if (l.startsWith('+')) return truecolor ? band(gutter, l, ADDED, width) : `${dim(gutter)}${green(l)}`;
       if (l.startsWith('-')) return truecolor ? band(gutter, l, REMOVED, width) : `${dim(gutter)}${red(l)}`;
-      return dim(gutter + l);
+      return truecolor ? panel(gutter + l, dim(gutter + l), width) : dim(gutter + l);
     })
     .join('\n');
 }

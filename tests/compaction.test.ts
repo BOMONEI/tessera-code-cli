@@ -305,6 +305,7 @@ describe('context limit', () => {
       c.enqueue({ type: 'stream-start', warnings: [] });
       c.enqueue({ type: 'text-start', id: 't' });
       c.enqueue({ type: 'text-delta', id: 't', delta: 'partial' });
+      await new Promise((r) => setTimeout(r, 20)); // the text reaches the agent first
       ctrl.abort();
     };
     script.push('slow');
@@ -313,7 +314,27 @@ describe('context limit', () => {
     slowToolStream = undefined;
     const last = events.findLast((e) => e.type === 'turn-finish') as AgentEventOf<'turn-finish'> | undefined;
     expect(last).toMatchObject({ finishReason: 'interrupted', usage: { outputTokens: 0 } });
+    expect(last!.discarded).toBeUndefined(); // part of an answer arrived: the turn stays in the history
     expect(last!.elapsedMs).toBeGreaterThan(0);
+  });
+
+  it('leaves a turn interrupted before any output out of the history', async () => {
+    const a = new Agent({ model, apiKey: 'k', sessionId: 's', system: '', tools: {}, maxSteps: 2, thinking: false, contextLimit: 300_000 });
+    script.push('text');
+    for await (const _ of a.run('first')) void _;
+    const before = [...a.messages];
+    const ctrl = new AbortController();
+    slowToolStream = async (c) => {
+      c.enqueue({ type: 'stream-start', warnings: [] });
+      ctrl.abort(); // still waiting for the first token
+    };
+    script.push('slow');
+    const events: AgentEvent[] = [];
+    for await (const ev of a.run('cancelled prompt', ctrl.signal)) events.push(ev);
+    slowToolStream = undefined;
+    expect(events.findLast((e) => e.type === 'turn-finish')).toMatchObject({ finishReason: 'interrupted', discarded: true });
+    expect(a.messages).toEqual(before);
+    expect(JSON.stringify(a.messages)).not.toContain('Interrupted by user');
   });
 
   it('caps the limit at 80% of the smallest model window', () => {
