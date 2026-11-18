@@ -158,12 +158,14 @@ program
   .description('list usable models: OpenCode Go (ZDR) and connected providers (<provider>/<model>)')
   .option('--refresh', 'refetch the catalog from models.dev')
   .action(async (opts) => {
-    const [{ loadCatalog, modelIsZdr, usableModels }, { loadConfig }, { setProviderSettings }] = await Promise.all([
+    const [{ loadCatalog, modelIsZdr, usableModels }, { loadConfig }, { setProviderSettings, unknownProviderWarnings }] = await Promise.all([
       import('./providers/catalog.js'),
       import('./config.js'),
       import('./providers/registry.js'),
     ]);
-    setProviderSettings((await loadConfig(process.cwd(), { trusted: false })).providers);
+    const { providers } = await loadConfig(process.cwd(), { trusted: false });
+    setProviderSettings(providers);
+    for (const w of unknownProviderWarnings(providers)) stderr.write(yellow(`⚠ ${w}\n`));
     for (const m of usableModels(await loadCatalog({ refresh: opts.refresh }))) {
       stdout.write(`${m.id.padEnd(40)} ${(modelIsZdr(m) ? 'ZDR' : 'non-ZDR').padEnd(8)} ${m.format.padEnd(9)} ctx ${formatTokens(m.context).padEnd(7)} $${m.cost.input}/$${m.cost.output} per 1M\n`);
     }

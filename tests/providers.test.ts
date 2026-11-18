@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { generateText } from 'ai';
 
-const { providerKey, providerIsZdr, setProviderSettings, splitModelId, availableProviders } = await import('../src/providers/registry.js');
+const { providerKey, providerIsZdr, setProviderSettings, splitModelId, availableProviders, unknownProviderWarnings } = await import('../src/providers/registry.js');
 const { parseCatalog, withConfiguredModels, findModel, isAllowedModel, modelIsZdr, usableModels, localModels } = await import('../src/providers/catalog.js');
 const { createModel, MissingProviderKeyError, NonZdrModelError } = await import('../src/providers/index.js');
 const { GLOBAL_CONFIG, loadConfig } = await import('../src/config.js');
@@ -48,6 +48,19 @@ describe('model ids and keys', () => {
   });
 });
 
+describe('unknown providers in the config', () => {
+  it('warns about each one, with the id that was probably meant', () => {
+    expect(unknownProviderWarnings({ openai: {}, lmstudio: {} })).toEqual([]);
+    expect(unknownProviderWarnings(undefined)).toEqual([]);
+    const w = unknownProviderWarnings({ 'lm-studio': {}, 'Open_AI': {}, olama: {}, 'opencode-go': {}, whatever: {} });
+    expect(w[0]).toMatch(/Unknown provider "lm-studio".*ignored\. Did you mean "lmstudio"\?/);
+    expect(w[1]).toMatch(/"Open_AI".*Did you mean "openai"/);
+    expect(w[2]).toMatch(/"olama".*Did you mean "ollama"/);
+    expect(w[3]).toMatch(/top-level "apiKey"/);
+    expect(w[4]).toMatch(/"whatever".*See \/providers/);
+  });
+});
+
 describe('catalog', () => {
   const catalog = parseCatalog(MODELS_DEV);
 
@@ -67,6 +80,16 @@ describe('catalog', () => {
     expect(all.find((m) => m.id === 'ollama/qwen3:32b')).toMatchObject({ provider: 'ollama', format: 'chat', context: 128000 });
     expect(all.find((m) => m.id === 'openai/gpt-5')).toMatchObject({ context: 200000, cost: { input: 1.25, output: 10 } });
     expect(all.find((m) => m.id === 'openai/my-finetune')).toMatchObject({ name: 'Mine', format: 'responses', context: 64000, reasoning: true });
+    // A window smaller than the default output limit: the output is capped to leave room for the input.
+    setProviderSettings({ lmstudio: { models: { small: { context: 16384 }, mid: { context: 32768 }, own: { context: 32768, output: 16000 } } } });
+    const local = withConfiguredModels(catalog);
+    expect(local.find((m) => m.id === 'lmstudio/small')).toMatchObject({ context: 16384, output: 4096 });
+    expect(local.find((m) => m.id === 'lmstudio/mid')).toMatchObject({ context: 32768, output: 8192 });
+    expect(local.find((m) => m.id === 'lmstudio/own')).toMatchObject({ output: 16000 }); // set explicitly: kept
+    setProviderSettings({
+      ollama: { baseURL: 'http://127.0.0.1:8000/v1', models: ['qwen3:32b', ' '] },
+      openai: { apiKey: 'k', models: { 'gpt-5': { context: 200000 }, 'my-finetune': { name: 'Mine', context: 64000, reasoning: true } } },
+    });
     expect(all.filter((m) => m.id.startsWith('ollama/'))).toHaveLength(1);
     expect(usableModels(all).map((m) => m.id)).toEqual(expect.arrayContaining(['ollama/qwen3:32b', 'openai/my-finetune']));
     setProviderSettings({});

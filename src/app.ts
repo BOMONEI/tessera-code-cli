@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { ToolSet } from 'ai';
 import { HOME_DIR, THINKING_LEVELS, addProjectAllowRule, loadConfig, projectTrust, resolveApiKey, saveGlobalSetting, trustProject, type Config, type ThinkingLevel } from './config.js';
 import { loadCatalog, findModel, isAllowedModel, isZdr, modelIsZdr, type ModelInfo } from './providers/catalog.js';
-import { providerDef, providerKey, setProviderSettings } from './providers/registry.js';
+import { providerDef, providerKey, setProviderSettings, unknownProviderWarnings } from './providers/registry.js';
 import { PermissionManager, type PermissionMode, type PromptFn } from './permissions.js';
 import { Agent } from './agent/agent.js';
 import { MissingProviderKeyError, NonZdrModelError } from './providers/index.js';
@@ -416,6 +416,7 @@ export async function createApp(opts: AppOptions): Promise<App> {
       ...(auth.key || model.provider ? [] : [NO_API_KEY]),
       ...(modelIsZdr(model) ? [] : [nonZdrWarning(model)]),
       ...hooks.warnings,
+      ...unknownProviderWarnings(config.providers),
       ...skipped.map((id) => `Fallback model ${id} ignored: ${isZdr(id) ? 'not in the model catalog' : 'not zero-data-retention'}.`)],
     async *run(prompt, signal, images) {
       // The OpenCode key is needed for Go models (and the fallback chain); other providers check their own key.

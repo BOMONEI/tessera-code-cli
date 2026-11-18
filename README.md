@@ -186,7 +186,9 @@ from the provider's usual environment variable (`OPENAI_API_KEY`, `ANTHROPIC_API
 
 `"models"` adds models models.dev does not know (a fine-tune, a model on a self-hosted server): a list of ids, or ids
 with `name`, `context`, `output`, `reasoning`, `images`, which also override models.dev's values for a listed model.
-Unknown models default to a 128k context. Local servers' own models (their `/models`) are listed anyway.
+Unknown models default to a 128k context; set `context` to what the server really loads (unless `output` is
+set, an answer may use at most a quarter of it). Local servers' own models (their `/models`) are listed anyway. A
+provider name tessera does not know (`lm-studio` for `lmstudio`) is ignored with a warning at startup.
 
 **Data retention.** OpenCode Go stays limited to its zero-data-retention models. Other providers may keep prompts and
 code under their own terms, so their models are marked **non-ZDR**: a warning when one is picked or used at startup,

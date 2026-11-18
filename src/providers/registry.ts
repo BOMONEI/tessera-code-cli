@@ -115,3 +115,28 @@ export function providerIsZdr(id: string): boolean {
 export function availableProviders(env: NodeJS.ProcessEnv = process.env): ProviderDef[] {
   return PROVIDERS.filter((p) => p.local || providerKey(p.id, env));
 }
+
+/**
+ * Warnings for "providers" entries tessera does not know (they are ignored), with the id that was probably meant:
+ * "lm-studio" → lmstudio, "open-ai" → openai, "olama" → ollama.
+ */
+export function unknownProviderWarnings(configured: Record<string, unknown> | undefined): string[] {
+  const squash = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+  return Object.keys(configured ?? {})
+    .filter((id) => !providerDef(id))
+    .map((id) => {
+      const guess = PROVIDERS.find((p) => squash(p.id) === squash(id)) ?? PROVIDERS.find((p) => editDistance(squash(p.id), squash(id)) <= 2);
+      const hint = id === OPENCODE_GO ? ' (the OpenCode Go key is the top-level "apiKey")' : guess ? ` Did you mean "${guess.id}"?` : ' See /providers for the names.';
+      return `Unknown provider "${id}" in "providers" (config.json), ignored.${hint}`;
+    });
+}
+
+function editDistance(a: string, b: string): number {
+  let row = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const next = [i];
+    for (let j = 1; j <= b.length; j++) next.push(Math.min(row[j]! + 1, next[j - 1]! + 1, row[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1)));
+    row = next;
+  }
+  return row[b.length]!;
+}

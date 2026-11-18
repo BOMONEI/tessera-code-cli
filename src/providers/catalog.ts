@@ -156,7 +156,11 @@ export function withConfiguredModels(catalog: ModelInfo[]): ModelInfo[] {
   const byId = new Map(catalog.map((m) => [m.id, m]));
   for (const { id, own } of extra) {
     const set = Object.fromEntries(Object.entries(own).filter(([k, v]) => v !== undefined && CONFIGURABLE.has(k)));
-    byId.set(id, { ...(byId.get(id) ?? findModel([], id)), ...set });
+    const m = { ...(byId.get(id) ?? findModel([], id)), ...set };
+    // Unless set, the answer gets at most a quarter of the window: with a small one (a local server's 32k) the default
+    // 32k output limit would leave no room for the input, and servers like vLLM reject input + max_tokens > window.
+    if (own.output === undefined) m.output = Math.min(m.output, Math.floor(m.context / 4));
+    byId.set(id, m);
   }
   return [...byId.values()].sort((a, b) => a.id.localeCompare(b.id));
 }

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.3 — 2026-11-18
+
+### Added
+- A provider name tessera does not know under `"providers"` (e.g. `lm-studio` for `lmstudio`) is no longer ignored
+  silently: a startup warning names it and the provider probably meant.
+
+### Fixed
+- A model listed under `"models"` without `"output"` may use at most a quarter of its window for an answer, so a
+  small local window (16k, 32k) keeps room for the input; servers like vLLM rejected the old 32k default there.
+
 ## 0.5.2 — 2026-11-18
 
 ### Added
