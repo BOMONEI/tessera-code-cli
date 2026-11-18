@@ -64,6 +64,13 @@ describe('system prompt', () => {
     expect(local).toBeGreaterThan(global);
   });
 
+  it('asks for fewer round trips and short answers', async () => {
+    const system = await buildSystemPrompt(project(), 'm');
+    expect(system).toContain('Fewer round trips');
+    expect(system).toMatch(/all the edits a change needs in one response/);
+    expect(system.indexOf('Fewer round trips')).toBeLessThan(system.indexOf('Response style'));
+  });
+
   it('reads the project prompt file next to a root TESSERA.md, without hiding it', async () => {
     const cwd = project();
     writeFileSync(join(cwd, 'AGENTS.md'), 'team rules');

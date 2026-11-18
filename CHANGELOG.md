@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.2 — 2026-11-18
+
+### Changed
+- Faster turns: the system prompt asks the model for fewer tool round trips (lookups and edits batched in one
+  response, nothing re-read that is already known, checks run once at the end) and for no narration between tool
+  calls. Takes effect in new sessions.
+
 ## 0.6.1 — 2026-11-18
 
 ### Changed
