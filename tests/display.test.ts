@@ -7,7 +7,7 @@ import type { HistoryItem } from '../src/ui/tui/components.js';
 process.env.FORCE_COLOR = '3';
 const { render } = await import('ink');
 const { HistoryView } = await import('../src/ui/tui/components.js');
-const { colorDiff, diffLineNumbers, outputText } = await import('../src/ui/format.js');
+const { colorDiff, diffLineNumbers, formatTiming, outputText } = await import('../src/ui/format.js');
 const { transcriptOf } = await import('../src/ui/transcript.js');
 
 const strip = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
@@ -138,5 +138,14 @@ describe('/command', () => {
   it('lists the keys the bottom bar no longer shows', async () => {
     const { KEYS_HELP } = await import('../src/commands.js');
     for (const k of ['ctrl+t', 'shift+tab', 'ctrl+o', 'ctrl+v', 'ctrl+r', 'ctrl+g', '/mcp']) expect(KEYS_HELP).toContain(k);
+  });
+});
+
+describe('turn summary', () => {
+  it('shows the time, the first token and the writing speed', () => {
+    expect(formatTiming({ elapsedMs: 12_300, firstOutputMs: 1_200, outputMs: 4_000, usage: { outputTokens: 800 } })).toBe('⏱ 12.3s (first token 1.2s · 200 tok/s)');
+    // Too short to measure a rate, or nothing written yet.
+    expect(formatTiming({ elapsedMs: 900, firstOutputMs: 800, outputMs: 100, usage: { outputTokens: 5 } })).toBe('⏱ 900ms (first token 800ms)');
+    expect(formatTiming({ elapsedMs: 2_000 })).toBe('⏱ 2.0s');
   });
 });

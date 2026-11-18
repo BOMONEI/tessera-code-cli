@@ -65,6 +65,8 @@ vi.mock('../src/providers/index.js', async (orig) => ({
 vi.mock('../src/cost/ledger.js', () => ({ recordSpend: async () => {} }));
 
 const { Agent } = await import('../src/agent/agent.js');
+type AgentEvent = import('../src/agent/agent.js').AgentEvent;
+type AgentEventOf<T extends AgentEvent['type']> = Extract<AgentEvent, { type: T }>;
 
 const model: ModelInfo = { id: 'mock', name: 'mock', format: 'chat', context: 1_000_000, output: 1000, reasoning: false, cost: { input: 0, output: 0, cacheRead: 0 } };
 const big = tool({ description: 'big output', inputSchema: z.object({}), execute: async () => 'x'.repeat(2000) });
@@ -274,6 +276,44 @@ describe('context limit', () => {
     slowToolStream = undefined;
     expect(started).toHaveLength(2);
     expect(Math.min(...started)).toBeGreaterThanOrEqual(secondCallAt);
+  });
+
+  it('sums the time the model spent writing, and still reports timing and usage for an interrupted turn', async () => {
+    const a = new Agent({ model, apiKey: 'k', sessionId: 's', system: '', tools: {}, maxSteps: 2, thinking: false, contextLimit: 300_000 });
+    slowToolStream = async (c) => {
+      c.enqueue({ type: 'stream-start', warnings: [] });
+      await new Promise((r) => setTimeout(r, 150)); // waiting for the first token: not writing time
+      c.enqueue({ type: 'text-start', id: 't' });
+      c.enqueue({ type: 'text-delta', id: 't', delta: 'a' });
+      await new Promise((r) => setTimeout(r, 200));
+      c.enqueue({ type: 'text-delta', id: 't', delta: 'b' });
+      c.enqueue({ type: 'text-end', id: 't' });
+      c.enqueue({ type: 'finish', usage: usage(10), finishReason: { unified: 'stop', raw: 'stop' } });
+      c.close();
+    };
+    script.push('slow');
+    const done: AgentEventOf<'turn-finish'>[] = [];
+    for await (const ev of a.run('go')) if (ev.type === 'turn-finish') done.push(ev);
+    expect(done).toHaveLength(1);
+    expect(done[0]!.outputMs).toBeGreaterThanOrEqual(190);
+    expect(done[0]!.outputMs).toBeLessThan(300);
+    expect(done[0]!.firstOutputMs).toBeGreaterThanOrEqual(140);
+
+    // Interrupted mid-answer: no 'finish' from the model, yet the turn's time and usage so far are reported.
+    const ctrl = new AbortController();
+    slowToolStream = async (c) => {
+      c.enqueue({ type: 'stream-start', warnings: [] });
+      c.enqueue({ type: 'text-start', id: 't' });
+      c.enqueue({ type: 'text-delta', id: 't', delta: 'partial' });
+      ctrl.abort();
+    };
+    script.push('slow');
+    const events: AgentEvent[] = [];
+    for await (const ev of a.run('go', ctrl.signal)) events.push(ev);
+    slowToolStream = undefined;
+    const last = events.findLast((e) => e.type === 'turn-finish') as AgentEventOf<'turn-finish'> | undefined;
+    expect(last).toMatchObject({ finishReason: 'interrupted', usage: { outputTokens: 0 } });
+    expect(last!.elapsedMs).toBeGreaterThan(0);
   });
 
   it('caps the limit at 80% of the smallest model window', () => {

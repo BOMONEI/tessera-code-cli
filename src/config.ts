@@ -44,7 +44,7 @@ export interface Config {
   subagents: boolean;
   /** Let several subagents run in parallel (implies subagents). Both false: a single agent only. */
   multiAgent: boolean;
-  /** Other model providers: { "<id>": { apiKey?, baseURL?, zdr? } } (see providers/registry.ts). Global config only. */
+  /** Other model providers: { "<id>": { apiKey?, baseURL?, zdr?, models? } } (see providers/registry.ts). Global config only. */
   providers: Record<string, ProviderSettings>;
 }
 

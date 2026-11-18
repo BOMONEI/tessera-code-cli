@@ -178,11 +178,15 @@ from the provider's usual environment variable (`OPENAI_API_KEY`, `ANTHROPIC_API
 
 ```json
 "providers": {
-  "openai":     { "apiKey": "sk-…" },
+  "openai":     { "apiKey": "sk-…", "models": { "my-finetune": { "context": 128000, "reasoning": true } } },
   "openrouter": { "apiKey": "sk-or-…", "zdr": true },
-  "ollama":     { "baseURL": "http://127.0.0.1:11434/v1" }
+  "ollama":     { "baseURL": "http://127.0.0.1:8000/v1", "models": ["qwen3:32b"] }
 }
 ```
+
+`"models"` adds models models.dev does not know (a fine-tune, a model on a self-hosted server): a list of ids, or ids
+with `name`, `context`, `output`, `reasoning`, `images`, which also override models.dev's values for a listed model.
+Unknown models default to a 128k context. Local servers' own models (their `/models`) are listed anyway.
 
 **Data retention.** OpenCode Go stays limited to its zero-data-retention models. Other providers may keep prompts and
 code under their own terms, so their models are marked **non-ZDR**: a warning when one is picked or used at startup,

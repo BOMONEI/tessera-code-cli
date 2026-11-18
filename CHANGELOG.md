@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.2 — 2026-11-18
+
+### Added
+- `"models"` under a provider in `~/.tessera-code/config.json` lists models models.dev does not know (fine-tunes,
+  models on a self-hosted server), as ids or with `name`, `context`, `output`, `reasoning`, `images`; set values also
+  override models.dev's for a listed model.
+- The summary after each answer shows the writing speed (`tok/s`, the model's writing time only).
+
+### Changed
+- The answer's summary includes subagents' tokens and cost, and an interrupted or failed answer also shows its time
+  and usage so far.
+
 ## 0.5.1 — 2026-10-21
 
 ### Added

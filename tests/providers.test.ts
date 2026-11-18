@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { generateText } from 'ai';
 
 const { providerKey, providerIsZdr, setProviderSettings, splitModelId, availableProviders } = await import('../src/providers/registry.js');
-const { parseCatalog, findModel, isAllowedModel, modelIsZdr, usableModels, localModels } = await import('../src/providers/catalog.js');
+const { parseCatalog, withConfiguredModels, findModel, isAllowedModel, modelIsZdr, usableModels, localModels } = await import('../src/providers/catalog.js');
 const { createModel, MissingProviderKeyError, NonZdrModelError } = await import('../src/providers/index.js');
 const { GLOBAL_CONFIG, loadConfig } = await import('../src/config.js');
 const { runCommand } = await import('../src/commands.js');
@@ -56,6 +56,21 @@ describe('catalog', () => {
     expect(catalog.find((m) => m.id === 'openai/gpt-5')).toMatchObject({ provider: 'openai', format: 'responses', context: 400000, cost: { input: 1.25, output: 10 } });
     expect(catalog.find((m) => m.id === 'anthropic/claude-sonnet-4-5')!.format).toBe('messages');
     expect(catalog.find((m) => m.id === 'openrouter/anthropic/claude-sonnet-4.5')!.format).toBe('chat');
+  });
+
+  it('adds the models listed in the config, with their own limits winning over models.dev\'s', () => {
+    setProviderSettings({
+      ollama: { baseURL: 'http://127.0.0.1:8000/v1', models: ['qwen3:32b', ' '] },
+      openai: { apiKey: 'k', models: { 'gpt-5': { context: 200000 }, 'my-finetune': { name: 'Mine', context: 64000, reasoning: true } } },
+    });
+    const all = withConfiguredModels(catalog);
+    expect(all.find((m) => m.id === 'ollama/qwen3:32b')).toMatchObject({ provider: 'ollama', format: 'chat', context: 128000 });
+    expect(all.find((m) => m.id === 'openai/gpt-5')).toMatchObject({ context: 200000, cost: { input: 1.25, output: 10 } });
+    expect(all.find((m) => m.id === 'openai/my-finetune')).toMatchObject({ name: 'Mine', format: 'responses', context: 64000, reasoning: true });
+    expect(all.filter((m) => m.id.startsWith('ollama/'))).toHaveLength(1);
+    expect(usableModels(all).map((m) => m.id)).toEqual(expect.arrayContaining(['ollama/qwen3:32b', 'openai/my-finetune']));
+    setProviderSettings({});
+    expect(withConfiguredModels(catalog)).toBe(catalog);
   });
 
   it('OpenCode Go stays ZDR-only; other providers are allowed and flagged', () => {

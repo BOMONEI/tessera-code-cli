@@ -16,8 +16,12 @@ export type AgentEvent =
   | { type: 'tool-call'; id: string; name: string; input: unknown }
   | { type: 'tool-result'; id: string; name: string; output: unknown; isError: boolean }
   | { type: 'step-finish'; usage: Usage }
-  /** `elapsedMs`: whole turn; `firstOutputMs`: until the model's first output (text, thinking or tool call). */
-  | { type: 'turn-finish'; usage: Usage; finishReason: string; elapsedMs: number; firstOutputMs?: number }
+  /**
+   * Also sent when a turn is interrupted or fails (finishReason 'interrupted' / 'error'), with what it used so far.
+   * `elapsedMs`: whole turn; `firstOutputMs`: until the model's first output (text, thinking or tool call);
+   * `outputMs`: time the model spent writing, summed over the steps (output tokens / outputMs = generation speed).
+   */
+  | { type: 'turn-finish'; usage: Usage; finishReason: string; elapsedMs: number; firstOutputMs?: number; outputMs?: number }
   | { type: 'compacted'; before: number; summary: string }
   | { type: 'fallback'; from: string; to: string; reason: string }
   | { type: 'info'; text: string }
@@ -159,6 +163,8 @@ export class Agent {
   system: string;
   tools: ToolSet;
   readonly total: Usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cost: 0 };
+  /** The running turn's usage, so subagents' spend shows in the turn's summary too. */
+  private turnUsage?: Usage;
   /** Prompt size of the most recent LLM call: the current context window usage. */
   contextTokens = 0;
   /** Reasoning on/off; applies from the next LLM call. */
@@ -283,6 +289,7 @@ export class Agent {
   /** Adds usage spent elsewhere for this session (subagents) to its totals; their spend is already recorded. */
   absorbUsage(u: Usage): void {
     this.addUsage(this.total, u);
+    if (this.turnUsage) this.addUsage(this.turnUsage, u);
   }
 
   /** A new key (/auth): models created with the old one are dropped. */
@@ -358,6 +365,10 @@ export class Agent {
           : [{ role: 'user', content: input }];
     let history = [...this.messages, ...added];
     const turn: Usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cost: 0 };
+    this.turnUsage = turn;
+    // Writing time: from a step's first output to its end (tool runs and waiting for the first token excluded).
+    let outputMs = 0;
+    let stepOutputAt: number | undefined;
     let failed = false;
     let finished = false;
     // Messages of fully completed steps (assistant + matching tool results); kept even if a later step fails.
@@ -448,7 +459,10 @@ export class Agent {
     try {
       for await (const part of result.fullStream) {
         while (notices.length) yield notices.shift()!;
-        if (firstOutputAt === undefined && (part.type === 'text-delta' || part.type === 'reasoning-delta' || part.type === 'tool-call')) firstOutputAt = performance.now();
+        if (part.type === 'text-delta' || part.type === 'reasoning-delta' || part.type === 'tool-input-start' || part.type === 'tool-call') {
+          firstOutputAt ??= performance.now();
+          stepOutputAt ??= performance.now();
+        }
         switch (part.type) {
           case 'text-delta':
             yield { type: 'text', text: part.text };
@@ -469,6 +483,8 @@ export class Agent {
             yield { type: 'tool-result', id: part.toolCallId, name: part.toolName, output: errorMessage(part.error), isError: true };
             break;
           case 'finish-step': {
+            if (stepOutputAt !== undefined) outputMs += performance.now() - stepOutputAt;
+            stepOutputAt = undefined;
             const u = toUsage(served, part.usage);
             this.contextTokens = u.inputTokens + u.outputTokens;
             this.addUsage(turn, u);
@@ -485,6 +501,7 @@ export class Agent {
               finishReason: part.finishReason,
               elapsedMs: performance.now() - startedAt,
               firstOutputMs: firstOutputAt === undefined ? undefined : firstOutputAt - startedAt,
+              outputMs,
             };
             break;
           case 'error':
@@ -501,6 +518,17 @@ export class Agent {
       if (!signal?.aborted) yield { type: 'error', message: errorMessage(e) };
     }
     while (notices.length) yield notices.shift()!;
+    this.turnUsage = undefined;
+    if (!finished) {
+      yield {
+        type: 'turn-finish',
+        usage: turn,
+        finishReason: signal?.aborted ? 'interrupted' : 'error',
+        elapsedMs: performance.now() - startedAt,
+        firstOutputMs: firstOutputAt === undefined ? undefined : firstOutputAt - startedAt,
+        outputMs,
+      };
+    }
 
     if (finished && !failed) {
       // Completed normally (an interrupt arriving after the final step does not discard the answer).

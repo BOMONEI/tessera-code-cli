@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { HOME_DIR } from '../config.js';
-import { OPENCODE_GO, PROVIDERS, availableProviders, providerDef, providerIsZdr, providerSettings, splitModelId, type Protocol } from './registry.js';
+import { OPENCODE_GO, PROVIDERS, availableProviders, providerDef, providerIsZdr, providerSettings, splitModelId, type ConfiguredModel, type Protocol } from './registry.js';
 
 /** Which wire protocol a Go model speaks. */
 export type ApiFormat = 'chat' | 'messages' | 'responses';
@@ -132,10 +132,33 @@ export async function loadCatalog(opts: { refresh?: boolean } = {}): Promise<Mod
   const cached = opts.refresh ? undefined : await readCache();
   if (cached) {
     if (cached.ageMs > CACHE_TTL_MS) void fetchCatalog();
-    return cached.models;
+    return withConfiguredModels(cached.models);
   }
   // Offline with an older cache: still better than the built-in list.
-  return (await fetchCatalog()) ?? (await readCache(true))?.models ?? FALLBACK;
+  return withConfiguredModels((await fetchCatalog()) ?? (await readCache(true))?.models ?? FALLBACK);
+}
+
+/** Models listed under "providers": { "<id>": { "models": … } } in the config: "<provider>/<model>" and the limits set there. */
+function configuredModels(): Array<{ id: string; own: ConfiguredModel }> {
+  return PROVIDERS.flatMap((def) => {
+    const list = providerSettings(def.id).models ?? [];
+    const entries = Array.isArray(list) ? list.map((id): [string, ConfiguredModel] => [id, {}]) : Object.entries(list);
+    return entries.filter(([id]) => typeof id === 'string' && id.trim()).map(([id, own]) => ({ id: `${def.id}/${id.trim()}`, own: own ?? {} }));
+  });
+}
+
+const CONFIGURABLE = new Set(['name', 'context', 'output', 'reasoning', 'images']);
+
+/** The catalog plus the configured models; limits set in the config win over models.dev's. */
+export function withConfiguredModels(catalog: ModelInfo[]): ModelInfo[] {
+  const extra = configuredModels();
+  if (!extra.length) return catalog;
+  const byId = new Map(catalog.map((m) => [m.id, m]));
+  for (const { id, own } of extra) {
+    const set = Object.fromEntries(Object.entries(own).filter(([k, v]) => v !== undefined && CONFIGURABLE.has(k)));
+    byId.set(id, { ...(byId.get(id) ?? findModel([], id)), ...set });
+  }
+  return [...byId.values()].sort((a, b) => a.id.localeCompare(b.id));
 }
 
 export function findModel(catalog: ModelInfo[], id: string): ModelInfo {

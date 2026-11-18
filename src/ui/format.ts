@@ -106,8 +106,14 @@ export function formatDuration(ms: number): string {
 }
 
 /** "⏱ 4.6s (first token 1.2s)" for the end of a turn. */
-export function formatTiming(ev: { elapsedMs: number; firstOutputMs?: number }): string {
-  return `⏱ ${formatDuration(ev.elapsedMs)}${ev.firstOutputMs !== undefined ? ` (first token ${formatDuration(ev.firstOutputMs)})` : ''}`;
+/** "⏱ 12.3s (first token 1.2s · 45 tok/s)": the speed is output tokens over the time the model spent writing them. */
+export function formatTiming(ev: { elapsedMs: number; firstOutputMs?: number; outputMs?: number; usage?: Pick<Usage, 'outputTokens'> }): string {
+  const parts = [
+    ...(ev.firstOutputMs !== undefined ? [`first token ${formatDuration(ev.firstOutputMs)}`] : []),
+    // Under ~0.3s (one burst) the rate says nothing.
+    ...(ev.outputMs && ev.outputMs >= 300 && ev.usage?.outputTokens ? [`${Math.round((ev.usage.outputTokens * 1000) / ev.outputMs)} tok/s`] : []),
+  ];
+  return `⏱ ${formatDuration(ev.elapsedMs)}${parts.length ? ` (${parts.join(' · ')})` : ''}`;
 }
 
 export function formatUsage(u: Usage): string {

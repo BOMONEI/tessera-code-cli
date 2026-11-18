@@ -72,6 +72,19 @@ export interface ProviderSettings {
   baseURL?: string;
   /** The account has a zero-data-retention agreement; OpenRouter is then asked to use ZDR endpoints only. */
   zdr?: boolean;
+  /**
+   * Models to list besides models.dev's (for a local server, also besides what its /models reports): ids, or ids with
+   * their limits, e.g. ["qwen3:32b"] or { "qwen3:32b": { "context": 32768 } }. A listed model's limits override the catalog's.
+   */
+  models?: string[] | Record<string, ConfiguredModel>;
+}
+
+export interface ConfiguredModel {
+  name?: string;
+  context?: number;
+  output?: number;
+  reasoning?: boolean;
+  images?: boolean;
 }
 
 /** "providers" from the config, set once at startup and updated by /auth <provider>. */
