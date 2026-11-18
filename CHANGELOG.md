@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.0 — 2026-11-18
+
+### Added
+- Full-screen TUI (default): click a folded tool output, diff or thinking line to expand just that item (click again to
+  fold; `ctrl+o` still expands everything), scroll with the wheel or `PgUp`/`PgDn`, and drag over the conversation to
+  select and copy it. `"fullscreen": false` in the config keeps the previous view in the terminal's scrollback.
+- The release notes shown after an update open expanded.
+
+### Fixed
+- Release notes no longer break mid-sentence where the CHANGELOG source wraps a line.
+
 ## 0.5.3 — 2026-11-18
 
 ### Added

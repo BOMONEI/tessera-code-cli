@@ -135,13 +135,24 @@ program
         // input mounts. An answer arriving in between (VS Code answers instantly) was echoed by the tty as
         // "^[[?0u" and pushed the startup card down a line. In raw mode nothing is echoed; Ink still reads it.
         process.stdin.setRawMode(true);
-        const ink = render(createElement(TuiRoot, { core: app, bridge, initialPrompt: prompt, initialCommand: pickSession ? '/resume' : undefined, whatsNew: news }), {
+        // Full screen (default): the alternate screen with mouse reporting; the mouse sequences are taken out of the
+        // input before Ink reads it. Mouse reporting is turned off however the process ends.
+        const [{ mouseInput, MOUSE_ON, MOUSE_OFF }, { default: onExit }] = await Promise.all([import('./ui/tui/mouse.js'), import('signal-exit')]);
+        const mouse = app.config.fullscreen ? mouseInput(process.stdin, stdout) : undefined;
+        if (mouse) {
+          stdout.write(MOUSE_ON);
+          // Also on a kill (SIGTERM, SIGHUP), where 'exit' never fires: the shell must not be left reporting clicks.
+          onExit(() => void stdout.write(MOUSE_OFF), { alwaysLast: true });
+        }
+        const ink = render(createElement(TuiRoot, { core: app, bridge, initialPrompt: prompt, initialCommand: pickSession ? '/resume' : undefined, whatsNew: news, mouse }), {
           exitOnCtrlC: false,
           // Lets terminals that support it report shift+enter (newline) distinctly from enter.
           kittyKeyboard: { mode: 'auto' },
+          ...(mouse ? { stdin: mouse.stdin, alternateScreen: true } : {}),
         });
         if (news) void markChangelogSeen(news.version).catch(() => {}); // shown once; /changelog shows it again
         await ink.waitUntilExit();
+        if (mouse) stdout.write(MOUSE_OFF);
         await app.store.sync(app.agent);
         await app.saveState();
         if (app.agent.messages.length) stdout.write(dim(`Resume with: tessera-code -r ${app.agent.sessionId.slice(0, 8)}${app.title ? `  (${app.title})` : ''}\n`));

@@ -1,4 +1,5 @@
 import stringWidth from 'string-width';
+import wrapAnsi from 'wrap-ansi';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -26,7 +27,9 @@ import { Input, inputRows as inputRowsOf, visibleCaret } from './Input.js';
 import { applyCompletion, complete, enterAction, type CommandInfo, type CompletionItem } from '../completion.js';
 import { VERSION } from '../../version.js';
 import { suggestFiles } from '../../agent/attachments.js';
-import { HistoryView, PermissionPrompt, Picker, middleEllipsis, type HistoryItem, type NewHistoryItem } from './components.js';
+import { HistoryView, PermissionPrompt, Picker, isExpandable, middleEllipsis, type HistoryItem, type NewHistoryItem } from './components.js';
+import type { MouseEvent, MouseInput } from './mouse.js';
+import { buildTranscript, highlight, selectedColumns, selectedText, type Point, type Selection, type Transcript } from './viewport.js';
 
 export interface TuiBridge {
   /** Set by the TUI; the permission manager forwards prompts here. */
@@ -92,6 +95,9 @@ const MENU_HINT = {
 } as const;
 let nextId = 0;
 
+/** Whether an item is drawn expanded before any click: the release notes after an update always, the rest with ctrl+o. */
+const openByDefault = (item: HistoryItem, expanded: boolean) => item.kind === 'changelog' || expanded;
+
 interface Mount {
   key: number;
   /** Lines to show after the redrawn conversation (e.g. "Resumed …"). */
@@ -111,6 +117,7 @@ export function TuiRoot({
   initialPrompt,
   initialCommand,
   whatsNew,
+  mouse,
 }: {
   core: Core;
   bridge: TuiBridge;
@@ -118,6 +125,8 @@ export function TuiRoot({
   initialCommand?: string;
   /** Release notes for the first run after an update; shown once, folded. */
   whatsNew?: WhatsNew;
+  /** Set for the full-screen view (see TuiApp). */
+  mouse?: MouseInput;
 }) {
   const [mount, setMount] = useState<Mount>({ key: 0, notices: [], input: '', queue: [] });
   const stdout = useStdout().stdout;
@@ -132,8 +141,9 @@ export function TuiRoot({
       notices={mount.notices}
       initialInput={mount.input}
       initialQueue={mount.queue}
+      mouse={mouse}
       onReload={(notices, input, queue) => {
-        stdout.write('\x1b[2J\x1b[3J\x1b[H');
+        if (!mouse) stdout.write('\x1b[2J\x1b[3J\x1b[H'); // full screen: the new frame replaces the old one
         setMount((m) => ({ key: m.key + 1, notices, input: input ?? '', queue }));
       }}
     />
@@ -193,6 +203,7 @@ export function TuiApp({
   initialInput,
   initialQueue,
   onReload,
+  mouse,
 }: {
   core: Core;
   bridge: TuiBridge;
@@ -203,7 +214,14 @@ export function TuiApp({
   initialInput: string;
   initialQueue: string[];
   onReload: (notices: string[], input: string | undefined, queue: string[]) => void;
+  /**
+   * Full screen (alternate screen, mouse on): the app draws the transcript itself in a scrollable viewport, so a
+   * click expands or folds one item, the wheel and PgUp/PgDn scroll, and a drag selects and copies. Without it the
+   * transcript is printed to the terminal's scrollback (<Static>) and only ctrl+o expands, everything at once.
+   */
+  mouse?: MouseInput;
 }) {
+  const fullscreen = Boolean(mouse);
   const { exit, suspendTerminal } = useApp();
   const stdout = useStdout().stdout as NodeJS.WriteStream;
   const [size, setSize] = useState({ columns: stdout.columns || 80, rows: stdout.rows || 24 });
@@ -215,12 +233,24 @@ export function TuiApp({
   const [expanded, setExpanded] = useState(false);
   /** Clears the screen and prints the history and the live frame again (ctrl+l, ctrl+o, width changes). */
   const redraw = useCallback(() => {
+    // Full screen: Ink only redraws what changed, so leave the terminal and come back for a complete repaint.
+    if (mouse) {
+      return void suspendTerminal(() => mouse.hold(true))
+        .finally(() => mouse.hold(false))
+        .catch(() => {}); // already suspended (two ctrl+l in one burst)
+    }
     stdout.write('\x1b[2J\x1b[3J\x1b[H');
     setStaticKey((k) => k + 1);
-  }, [stdout]);
+  }, [stdout, mouse, suspendTerminal]);
+  // Full screen: items expanded or folded by a click, against the ctrl+o state (ctrl+o resets them).
+  const [toggled, setToggled] = useState<ReadonlySet<number>>(() => new Set());
+  // Full screen: a dragged selection of transcript lines (copied on release).
+  const [selection, setSelection] = useState<Selection | undefined>();
   const toggleExpanded = () => {
     setExpanded((e) => !e);
-    redraw();
+    setToggled(new Set());
+    setSelection(undefined); // the lines move
+    if (!mouse) redraw();
   };
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -232,11 +262,14 @@ export function TuiApp({
       // Any width change counts, even one undone within the debounce window (a pane jiggling 120 → 119 → 120):
       // the terminal rewrapped full-width lines in between, so what is on screen no longer matches the frame Ink
       // erases, and stale copies of the input box piled up.
-      if (width !== lastWidth) widthChanged = true;
+      if (width !== lastWidth) {
+        widthChanged = true;
+        setSelection(undefined); // the lines are laid out again
+      }
       lastWidth = width;
       clearTimeout(timer);
       timer = setTimeout(() => {
-        if (!widthChanged) return;
+        if (!widthChanged || mouse) return; // full screen: the transcript is laid out again at the new width
         widthChanged = false;
         redraw();
       }, 150);
@@ -246,7 +279,7 @@ export function TuiApp({
       clearTimeout(timer);
       stdout.off('resize', onResize);
     };
-  }, [stdout, redraw]);
+  }, [stdout, redraw, mouse]);
   const widthRef = useRef(size.columns);
   widthRef.current = size.columns;
   const { agent } = core;
@@ -271,6 +304,7 @@ export function TuiApp({
   }, []);
   useEffect(() => () => clearTimeout(flashTimer.current), []);
   const [branch, setBranch] = useState<string | undefined>();
+  const [markdownReady, setMarkdownReady] = useState(false);
   const [status, setStatus] = useState<string | undefined>();
   // Start of the running turn/command, for the live elapsed time next to the spinner.
   const [busySince, setBusySince] = useState<number | undefined>();
@@ -444,7 +478,8 @@ export function TuiApp({
     void spendWindows().then(setSpend);
     void gitBranch(core.ctx.cwd).then(setBranch);
     void loadInputHistory(core.ctx.cwd).then((h) => (historyRef.current = h));
-    loadMarkdown().catch(() => {}); // after the first frame; needed only once answers arrive (raw text until then)
+    // After the first frame; needed only once answers arrive (raw text until then; full screen redraws them).
+    loadMarkdown().then(() => setMarkdownReady(true)).catch(() => {});
     // MCP status lives in the HUD (connected/configured); /mcp lists the servers and their errors.
     void core.mcpReady.then(() => setMcp(mcpCounts(core.mcpStatus)));
     if (core.config.updateCheck !== false) {
@@ -664,6 +699,8 @@ export function TuiApp({
       const text = expandPastes(raw).trim();
       setInput('');
       if (!text) return;
+      setScroll({ follow: true, top: 0 }); // back to the newest output
+      setSelection(undefined);
       if (busyRef.current) {
         if (turnRef.current && !/^[/!]/.test(text) && !/\[Image #\d+\]/.test(text)) {
           // Typed while the agent works: steer the running turn (delivered after the current step).
@@ -831,6 +868,7 @@ export function TuiApp({
       abortRef.current.abort();
       return;
     }
+    if (mouse && (key.pageUp || key.pageDown)) return scrollBy((key.pageUp ? -1 : 1) * Math.max(1, viewH - 2));
     if (key.ctrl && ch === 't') {
       agent.thinking = !agent.thinking;
       setThinking(agent.thinking);
@@ -855,8 +893,12 @@ export function TuiApp({
     if (key.ctrl && ch === 'g' && !busy) {
       // The editor runs synchronously; while a turn streams that would stall it, so only when idle.
       void suspendTerminal(() => {
-        const edited = editInEditor(input);
-        setInput(edited);
+        mouse?.hold(true);
+        try {
+          setInput(editInEditor(input));
+        } finally {
+          mouse?.hold(false);
+        }
       });
     }
   });
@@ -900,13 +942,106 @@ export function TuiApp({
   const caret = caretActive ? visibleCaret(input, cursor, inputBox.width - innerLeft - 2, inputMaxLines) : undefined;
   setCursorPosition(caret ? { x: inputBox.left + innerLeft + caret.x, y: frame.top + inputBox.top + 1 + caret.row } : undefined);
 
-  return (
-    <>
-      <Static key={staticKey} items={items}>
-        {(item) => <HistoryView key={item.id} item={item} width={size.columns} expanded={expanded} showThinking={core.config.showThinking} />}
-      </Static>
-      <Box flexDirection="column" ref={frameRef}>
-        {thinkingTail ? (
+  // Full screen: the transcript as lines, the window of them on screen, and mouse selection (see `mouse` above).
+  const [built, setBuilt] = useState<{ transcript: Transcript; items: HistoryItem[] }>({ transcript: { lines: [], owner: [] }, items: [] });
+  const transcript = built.transcript;
+  const isItemExpanded = useCallback((item: HistoryItem) => openByDefault(item, expanded) !== toggled.has(item.id), [expanded, toggled]);
+  useEffect(() => {
+    if (!mouse) return;
+    // From a timer: renderToString must not run inside React's render or commit (see viewport.ts).
+    const timer = setTimeout(() => setBuilt({ transcript: buildTranscript(items, { width: size.columns, showThinking: core.config.showThinking, isExpanded: isItemExpanded }), items }), 0);
+    return () => clearTimeout(timer);
+  }, [mouse, items, size.columns, isItemExpanded, core.config.showThinking, markdownReady]);
+  // What is still being written follows the transcript: the thinking's last lines, then the answer so far.
+  const liveLines = useMemo(() => {
+    if (!mouse) return [];
+    const out: string[] = [];
+    if (thinkingLive && !streaming && core.config.showThinking) {
+      const tail = streamTail(thinkingLive, size.columns - 3, 6);
+      out.push('', '\x1b[2;35m∴ Thinking…\x1b[0m', ...tail.text.split('\n').map((l) => `\x1b[2;3m  ${l}\x1b[0m`));
+    }
+    // Hard-wrapped: one line must be one screen row (before markdown loads, a paragraph is a single long line).
+    if (streaming) out.push('', ...wrapAnsi(streaming, size.columns, { hard: true, trim: false }).split('\n'));
+    return out;
+  }, [mouse, thinkingLive, streaming, size.columns, core.config.showThinking]);
+  // Until the transcript has caught up with the items (a timer away), the text just moved into them stays on
+  // screen as live lines; otherwise a finished answer would vanish for a frame.
+  const lastLive = useRef<string[]>([]);
+  const current = built.items === items;
+  if (current) lastLive.current = liveLines;
+  const tail = current ? liveLines : lastLive.current;
+  const allLines = mouse ? (tail.length ? [...transcript.lines, ...tail] : transcript.lines) : [];
+  const viewH = mouse ? Math.max(1, size.rows - (frame.hasMeasured ? frame.height : 8)) : 0;
+  const maxTop = Math.max(0, allLines.length - viewH);
+  // `follow`: stay at the bottom as output arrives; otherwise `top` (first line shown) holds still.
+  const [scroll, setScroll] = useState({ follow: true, top: 0 });
+  const top = scroll.follow ? maxTop : Math.min(scroll.top, maxTop);
+  const below = Math.max(0, allLines.length - top - viewH);
+  const viewRef = useRef({ top, maxTop, viewH, lines: allLines, owner: transcript.owner });
+  viewRef.current = { top, maxTop, viewH, lines: allLines, owner: transcript.owner };
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+  const scrollBy = useCallback((n: number) => {
+    setScroll((sc) => {
+      const v = viewRef.current;
+      const next = Math.max(0, Math.min(v.maxTop, (sc.follow ? v.maxTop : Math.min(sc.top, v.maxTop)) + n));
+      return { follow: next >= v.maxTop, top: next };
+    });
+  }, []);
+  const dragRef = useRef<{ anchor: Point; moved: boolean } | undefined>(undefined);
+  useEffect(() => {
+    if (!mouse) return;
+    const onMouse = (e: MouseEvent) => {
+      if (e.kind === 'wheel') return scrollBy(e.dir === 'up' ? -3 : 3);
+      const v = viewRef.current;
+      const row = e.y - 1;
+      const point = { line: v.top + Math.max(0, Math.min(row, v.viewH - 1)), col: Math.max(0, e.x - 1) };
+      if (e.kind === 'press') {
+        // Only the transcript: the input box and the bars below it are not selectable.
+        dragRef.current = row < v.viewH ? { anchor: point, moved: false } : undefined;
+        setSelection(undefined);
+        return;
+      }
+      const drag = dragRef.current;
+      if (!drag) return;
+      if (e.kind === 'drag') {
+        if (row <= 0) scrollBy(-1);
+        else if (row >= v.viewH) scrollBy(1);
+        drag.moved ||= point.line !== drag.anchor.line || point.col !== drag.anchor.col;
+        if (drag.moved) setSelection({ anchor: drag.anchor, head: point });
+        return;
+      }
+      dragRef.current = undefined;
+      if (drag.moved) {
+        const text = selectedText(v.lines, { anchor: drag.anchor, head: point });
+        if (text.trim()) void copyToClipboard(text).then((via) => (via ? showFlash('✓ clipboard copied!') : showFlash('✗ clipboard unavailable', false)));
+        return;
+      }
+      // A click: expand or fold the item under it, keeping the view where it is (the item stays under the mouse).
+      const id = v.owner[point.line];
+      const item = id === undefined ? undefined : itemsRef.current.find((i) => i.id === id);
+      if (!item || !isExpandable(item)) return;
+      setToggled((t) => {
+        const next = new Set(t);
+        if (!next.delete(item.id)) next.add(item.id);
+        return next;
+      });
+      setScroll({ follow: false, top: v.top });
+    };
+    mouse.onEvent(onMouse);
+    return () => mouse.onEvent(undefined);
+  }, [mouse, scrollBy, showFlash]);
+  const shownRows = mouse
+    ? allLines.slice(top, top + viewH).map((line, i) => {
+        const cols = selection && selectedColumns(selection, top + i);
+        return cols ? highlight(line, cols[0], cols[1]) : line;
+      })
+    : [];
+
+  const bottom = (
+      <Box flexDirection="column" ref={frameRef} flexShrink={0}>
+        {mouse && below > 0 ? <Text dimColor>{`  ↓ ${below} more line${below === 1 ? '' : 's'} · wheel or PgDn`}</Text> : null}
+        {thinkingTail && !mouse ? (
           <Box marginTop={1} flexDirection="column">
             <Text color="magenta" dimColor>
               ∴ Thinking…
@@ -916,7 +1051,7 @@ export function TuiApp({
             </Text>
           </Box>
         ) : null}
-        {live ? (
+        {live && !mouse ? (
           <Box marginTop={1} flexDirection="column">
             {live.hidden ? <Text dimColor>… {live.hidden} more lines above</Text> : null}
             <Text>{live.text}</Text>
@@ -1115,6 +1250,23 @@ export function TuiApp({
           </Text>
         </Box>
       </Box>
+  );
+  if (mouse) {
+    return (
+      <Box flexDirection="column" height={size.rows} overflow="hidden">
+        <Box height={viewH} flexShrink={1} minHeight={0} overflow="hidden">
+          <Text>{shownRows.join('\n')}</Text>
+        </Box>
+        {bottom}
+      </Box>
+    );
+  }
+  return (
+    <>
+      <Static key={staticKey} items={items}>
+        {(item) => <HistoryView key={item.id} item={item} width={size.columns} expanded={openByDefault(item, expanded)} showThinking={core.config.showThinking} />}
+      </Static>
+      {bottom}
     </>
   );
 }

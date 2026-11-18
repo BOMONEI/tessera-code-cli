@@ -40,6 +40,11 @@ describe('changelog parsing', () => {
     expect(countChanges(sectionsSince(sections, '0.1.0', '0.3.0'))).toBe(4);
   });
 
+  it('joins a bullet wrapped over several source lines into one', () => {
+    const [s] = parseChangelog('## 1.0.0\n\n- one long item that\n  continues here\n  and here\n- next');
+    expect(s!.markdown).toBe('## 1.0.0\n\n- one long item that continues here and here\n- next');
+  });
+
   it('ships a CHANGELOG with a section for the running version', async () => {
     expect(changelogPath()).toBeDefined();
     expect((await readChangelog()).some((s) => s.version === VERSION)).toBe(true);

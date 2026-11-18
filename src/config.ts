@@ -34,6 +34,11 @@ export interface Config {
   thinkingLevel: ThinkingLevel;
   /** Show the model's thinking in the TUI (streamed live, then folded into one line). Toggle with /think show|hide. */
   showThinking: boolean;
+  /**
+   * Full-screen TUI: a click expands one item, the wheel scrolls, a drag copies. false: the conversation goes to the
+   * terminal's own scrollback (its scrolling and selection) and ctrl+o expands everything at once.
+   */
+  fullscreen: boolean;
   /** Permission mode at startup: default (ask), acceptEdits (alias "edit"), plan (read-only) or bypass (never ask). */
   permissionMode: PermissionMode;
   /** Notify (bell + desktop notification) when a turn took at least this many seconds; 0 disables. */
@@ -85,6 +90,7 @@ const DEFAULTS: Config = {
   thinking: true,
   thinkingLevel: 'medium',
   showThinking: true,
+  fullscreen: true,
   permissionMode: 'default',
   notifyAfterSeconds: 20,
   updateCheck: true,
@@ -194,7 +200,7 @@ export async function loadConfig(cwd: string, opts: { trusted: boolean }): Promi
     [...new Set([...Object.keys(gh), ...Object.keys(ph)])].map((k) => [k, [...(gh[k as keyof HooksConfig] ?? []), ...(ph[k as keyof HooksConfig] ?? [])]]),
   );
   merged.permissionMode = parsePermissionMode(merged.permissionMode, '"permissionMode" in config');
-  for (const k of ['subagents', 'multiAgent'] as const) {
+  for (const k of ['subagents', 'multiAgent', 'fullscreen'] as const) {
     if (typeof merged[k] !== 'boolean') throw new Error(`Invalid "${k}" in config: use true or false (got ${JSON.stringify(merged[k])}).`);
   }
   if (typeof merged.showThinking !== 'boolean') throw new Error(`Invalid "showThinking" in config: use true or false (got ${JSON.stringify(merged.showThinking)}).`);

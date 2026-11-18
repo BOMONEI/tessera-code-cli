@@ -35,7 +35,40 @@ function capLines(text: string, max: number): string {
 /** Background of the user's prompts: a gray band that sets them apart from answers (light text on it, any theme). */
 export const USER_BG = '#3a3d42';
 
-export function HistoryView({ item, width, expanded = false, showThinking = true }: { item: HistoryItem; width: number; expanded?: boolean; showThinking?: boolean }) {
+/** Whether an item has more to show when expanded (a click or ctrl+o). */
+export function isExpandable(item: HistoryItem): boolean {
+  switch (item.kind) {
+    case 'changelog':
+    case 'reasoning':
+      return true;
+    case 'tool':
+      return item.output !== undefined && toolPreview(item.output, item.lines) !== item.output;
+    case 'diff':
+      return item.diff.split('\n').filter((l) => !l.startsWith('\\')).length > (item.maxLines ?? 30);
+    default:
+      return false;
+  }
+}
+
+/**
+ * `clickable`: the full-screen view, where a click expands or folds one item; the hints say so instead of ctrl+o
+ * (which still expands everything).
+ */
+export function HistoryView({
+  item,
+  width,
+  expanded = false,
+  showThinking = true,
+  clickable = false,
+}: {
+  item: HistoryItem;
+  width: number;
+  expanded?: boolean;
+  showThinking?: boolean;
+  clickable?: boolean;
+}) {
+  const expandHint = clickable ? 'click to expand' : 'ctrl+o to expand';
+  const foldHint = clickable && expanded ? <Text dimColor italic> (click to fold)</Text> : null;
   switch (item.kind) {
     case 'banner':
       return <WelcomeCard info={item.card} />;
@@ -62,8 +95,11 @@ export function HistoryView({ item, width, expanded = false, showThinking = true
     case 'changelog':
       return expanded ? (
         <Box marginTop={1} flexDirection="column">
-          <Text color="#facc15" bold>
-            ✨ Updated {item.from} → {item.version}
+          <Text>
+            <Text color="#facc15" bold>
+              ✨ Updated {item.from} → {item.version}
+            </Text>
+            {foldHint}
           </Text>
           <Text>{markdown()?.renderMarkdown(item.markdown, width - 1) ?? item.markdown}</Text>
         </Box>
@@ -75,7 +111,7 @@ export function HistoryView({ item, width, expanded = false, showThinking = true
             </Text>
             <Text dimColor>
               {' '}
-              (from {item.from}) · {item.count} change{item.count === 1 ? '' : 's'} · <Text italic>ctrl+o to expand · /changelog</Text>
+              (from {item.from}) · {item.count} change{item.count === 1 ? '' : 's'} · <Text italic>{expandHint} · /changelog</Text>
             </Text>
           </Text>
         </Box>
@@ -85,7 +121,10 @@ export function HistoryView({ item, width, expanded = false, showThinking = true
       const seconds = item.ms !== undefined ? ` for ${Math.max(1, Math.round(item.ms / 1000))}s` : '';
       return expanded ? (
         <Box flexDirection="column" marginTop={1}>
-          <Text color="magenta">∴ Thinking{seconds}</Text>
+          <Text>
+            <Text color="magenta">∴ Thinking{seconds}</Text>
+            {foldHint}
+          </Text>
           <Text dimColor italic>
             {capLines(item.text.trim(), EXPANDED_MAX_LINES).replace(/^/gm, '  ')}
           </Text>
@@ -93,7 +132,7 @@ export function HistoryView({ item, width, expanded = false, showThinking = true
       ) : (
         <Box marginTop={1}>
           <Text dimColor>
-            ∴ Thought{seconds} <Text italic>(ctrl+o to expand)</Text>
+            ∴ Thought{seconds} <Text italic>({expandHint})</Text>
           </Text>
         </Box>
       );
@@ -108,9 +147,10 @@ export function HistoryView({ item, width, expanded = false, showThinking = true
           <Text>
             <Text color={item.isError ? 'red' : 'cyan'}>● </Text>
             <Text bold>{item.label}</Text>
+            {more ? foldHint : null}
           </Text>
           {shown ? <Text dimColor>{shown.replace(/^/gm, '  ⎿ ')}</Text> : null}
-          {more && !expanded ? <Text dimColor italic>    (ctrl+o to expand)</Text> : null}
+          {more && !expanded ? <Text dimColor italic>    ({expandHint})</Text> : null}
         </Box>
       );
     }
@@ -118,13 +158,19 @@ export function HistoryView({ item, width, expanded = false, showThinking = true
       const lines = item.diff.split('\n').filter((l) => !l.startsWith('\\'));
       const limit = expanded ? Math.max(item.maxLines ?? 0, EXPANDED_MAX_LINES) : (item.maxLines ?? 30);
       const shown = lines.slice(0, limit);
+      const over = lines.length > (item.maxLines ?? 30);
       return (
         <Box flexDirection="column" paddingLeft={2}>
-          {item.maxLines ? <Text bold>{item.path}</Text> : null}
+          {item.maxLines || (foldHint && over) ? (
+            <Text>
+              {item.maxLines ? <Text bold>{item.path}</Text> : null}
+              {over ? foldHint : null}
+            </Text>
+          ) : null}
           <Text>{colorDiff(shown.join('\n'), width - 2)}</Text>
           {lines.length > shown.length ? (
             <Text dimColor>
-              … +{lines.length - shown.length} lines{expanded ? '' : <Text italic> (ctrl+o to expand)</Text>}
+              … +{lines.length - shown.length} lines{expanded ? '' : <Text italic> ({expandHint})</Text>}
             </Text>
           ) : null}
         </Box>

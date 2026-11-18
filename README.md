@@ -82,7 +82,10 @@ TUI keys:
 | `↑` / `↓` | move between lines; on the first/last line, browse earlier prompts (saved per directory) |
 | `ctrl+r` | search earlier prompts (`ctrl+r` again for older matches, `enter` to use) |
 | `ctrl+g` | edit the prompt in `$VISUAL` / `$EDITOR` |
-| `ctrl+o` | expand or fold tool output, diffs and thinking (folded by default) |
+| `ctrl+o` | expand or fold all tool output, diffs and thinking (folded by default) |
+| click | expand or fold just that item (full screen) |
+| wheel, `PgUp` / `PgDn` | scroll the conversation (full screen) |
+| drag | select conversation text; it is copied when you let go (full screen) |
 | `ctrl+l` | clear the screen and redraw the conversation (if the terminal left stale frames behind) |
 | `/` | command menu with descriptions; after a command, its arguments (`/model`, `/mode`, `/think`, `/resume`, `/copy`). `enter` runs, `tab` completes |
 | `@` | file picker (↑↓, tab/enter to insert) |
@@ -93,6 +96,12 @@ TUI keys:
 | `esc` | interrupt |
 | `ctrl+c` | copy the selected prompt text; otherwise clear the prompt; on an empty prompt interrupt (running) or exit (idle) |
 | `shift+←/→/↑/↓`, `shift+home/end` | select text in the prompt (typing or backspace replaces it) |
+
+The TUI runs full screen: the conversation scrolls inside the app (wheel, `PgUp`/`PgDn`), a click on a folded tool
+output, diff or thinking line expands just that item (click again to fold), and dragging over the conversation selects
+text and copies it when you let go. The terminal's own selection still works with `option` (alt) held while dragging
+in most terminals. On exit the terminal shows what it had before; `"fullscreen": false` in the config keeps the old
+behavior (the conversation printed into the terminal's scrollback, `ctrl+o` to expand).
 
 \* `shift+enter` needs a terminal with the kitty keyboard protocol (kitty, Ghostty, WezTerm, recent iTerm2).
 The terminal cursor follows the caret, so Korean/Japanese/Chinese IME composition shows in place. After a terminal
@@ -256,6 +265,7 @@ never overwritten; one without `"apiKey"` gets the entry added):
 | `thinking` | `true` / `false` | reasoning on/off (`ctrl+t`, `/think on\|off`) |
 | `thinkingLevel` | `low` / `medium` / `high` | effort when thinking is on (`/think low\|medium\|high`) |
 | `showThinking` | `true` / `false` | show the thinking text live, then folded (`/think show\|hide`; `ctrl+o` always shows it) |
+| `fullscreen` | `true` (default) / `false` | full-screen TUI: click to expand one item, wheel to scroll, drag to copy. `false` prints the conversation into the terminal's scrollback instead (the terminal's own scrolling and selection; `ctrl+o` only) |
 | `permissionMode` | `default` (ask) / `acceptEdits` (alias `edit`) / `plan` (read-only) / `bypass` (ask only for destructive commands and protected paths) / `dangerous` (never ask) | startup mode; `shift+tab` and `/mode` change it here too, so the new mode applies to every project from then on |
 | `mcpServers` | name → `{ "command", "args", "env" }` or `{ "url", "headers" }` | the built-in `exa` web search server is always there; `"enabled": false` turns it off |
 

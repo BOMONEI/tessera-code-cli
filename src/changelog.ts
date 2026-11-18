@@ -24,11 +24,14 @@ export function compareVersions(a: string, b: string): number {
   return 0;
 }
 
-/** Splits CHANGELOG.md at its "## x.y.z" headings. */
+/**
+ * Splits CHANGELOG.md at its "## x.y.z" headings. A list item's indented continuation lines are joined to it: the
+ * terminal renderer keeps source line breaks, so a bullet wrapped at the file's width broke mid-sentence on screen.
+ */
 export function parseChangelog(md: string): ChangelogSection[] {
   const sections: ChangelogSection[] = [];
   let current: { version: string; lines: string[] } | undefined;
-  for (const line of md.split('\n')) {
+  for (const line of md.replace(/(\S)\n {2,}(?=\S)/g, '$1 ').split('\n')) {
     const heading = /^##\s+v?(\d+\.\d+\.\d+\S*)/.exec(line);
     if (heading) {
       if (current) sections.push({ version: current.version, markdown: current.lines.join('\n').trim() });
