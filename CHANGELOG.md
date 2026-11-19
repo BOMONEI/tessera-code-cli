@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.3 — 2026-11-19
+
+### Fixed
+- Text between two single tildes in an answer (Korean ranges such as `1~3줄 … 5~6개`) no longer shows struck through
+  with the tildes missing; only `~~text~~` is strikethrough.
+
 ## 0.6.2 — 2026-11-18
 
 ### Changed

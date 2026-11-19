@@ -35,6 +35,17 @@ describe('markdown tables', () => {
   });
 });
 
+describe('strikethrough', () => {
+  it('keeps single tildes (Korean ranges like 1~3줄) as text and strikes only ~~text~~', () => {
+    const plain = renderMarkdown('1~3줄로 요약하고 5~6개, 약 10~20% (~30초) ~/work', 80);
+    expect(plain).not.toContain('\x1b[9m');
+    expect(plain).toContain('1~3줄로 요약하고 5~6개, 약 10~20% (~30초) ~/work');
+    const struck = renderMarkdown('a ~~gone~~ b', 80); // a del token: the tildes are consumed
+    expect(struck).toContain('gone');
+    expect(struck).not.toContain('~~');
+  });
+});
+
 describe('streamTail', () => {
   it('returns short text unchanged', () => {
     expect(streamTail('a\nb', 80, 10)).toEqual({ text: 'a\nb', hidden: 0 });

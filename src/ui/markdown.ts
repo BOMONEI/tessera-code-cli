@@ -38,6 +38,17 @@ function createMarked(width: () => number): Marked {
         if (tokens[i]!.type === 'code' && tokens[i - 1]!.type !== 'space') tokens.splice(i, 0, { type: 'text', raw: '', text: '\n' } as Tokens.Text);
       }
     },
+    tokenizer: {
+      // GFM also strikes through text between single tildes, so Korean ranges ("1~3줄 … 5~6개") came out struck
+      // through. Only ~~text~~ is strikethrough; a lone "~" stays text.
+      del(this: { lexer: { inlineTokens: (src: string) => Tokens.Generic[] } }, src: string) {
+        const m = /^~~(?=[^\s~])((?:\\.|[^\\])*?(?:\\.|[^\s~\\]))~~(?=[^~]|$)/.exec(src);
+        if (m) return { type: 'del', raw: m[0], text: m[1]!, tokens: this.lexer.inlineTokens(m[1]!) };
+        const tildes = /^~+/.exec(src)?.[0];
+        // A text token where marked expects a del one: the inline lexer takes any token.
+        return tildes ? ({ type: 'text', raw: tildes, text: tildes } as unknown as Tokens.Del) : undefined;
+      },
+    },
     renderer: {
       text(this: { parser: { parseInline: (t: Tokens.Generic[]) => string } }, token: Tokens.Text | Tokens.Escape) {
         return 'tokens' in token && token.tokens?.length ? this.parser.parseInline(token.tokens) : token.text;
