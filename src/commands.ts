@@ -481,7 +481,7 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
         return { output: app.config.showThinking ? 'Thinking is shown while the model works (folded afterwards; ctrl+o expands).' : 'Thinking is hidden (only the status line shows it is thinking; ctrl+o still shows it in full).' };
       }
       if (!agent.model.reasoning) return { output: `${agent.model.id} has no reasoning mode.` };
-      // "auto high", "on low", "low" (keeps on/auto as it is), "on", "auto", "off" or nothing (toggle).
+      // "auto high" (auto, at most high), "low" / "on low" (always low), "on", "auto", "off" or nothing (toggle).
       const words = arg.toLowerCase().split(/\s+/).filter(Boolean);
       const switchTo = words.find((w) => w === 'on' || w === 'off' || w === 'auto');
       const level = words.find((w) => THINKING_LEVELS.includes(w as ThinkingLevel)) as ThinkingLevel | undefined;
@@ -492,7 +492,7 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
       if (switchTo === 'off') agent.thinking = false;
       else if (switchTo || level) {
         agent.thinking = true;
-        if (switchTo) agent.thinkingAuto = switchTo === 'auto';
+        agent.thinkingAuto = switchTo === 'auto';
       } else agent.thinking = !agent.thinking;
       if (!agent.thinking) return { output: 'Thinking off — faster, best for simple edits' };
       return {
@@ -508,7 +508,7 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
         { value: 'on', hint: `${on && !auto ? 'current · ' : ''}reasoning at ${level}` },
         ...THINKING_LEVELS.map((l) => ({ value: `auto ${l}`, hint: `${on && auto && l === level ? 'current · ' : ''}per prompt, at most ${l}` })),
         { value: 'off', hint: `${on ? '' : 'current · '}faster, best for simple edits` },
-        ...THINKING_LEVELS.map((l) => ({ value: l, hint: `${on && !auto && l === level ? 'current · ' : ''}${hints[l]}${auto ? ' (auto: the most it may think)' : ''}` })),
+        ...THINKING_LEVELS.map((l) => ({ value: l, hint: `${on && !auto && l === level ? 'current · ' : ''}always ${l}: ${hints[l]}` })),
         { value: 'show', hint: `${app.config.showThinking ? 'current · ' : ''}show thinking text` },
         { value: 'hide', hint: `${app.config.showThinking ? '' : 'current · '}hide thinking text` },
       ];

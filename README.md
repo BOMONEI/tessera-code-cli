@@ -309,7 +309,7 @@ never overwritten; one without `"apiKey"` gets the entry added):
 | `model` | a ZDR model id (`tessera-code models`) | startup model |
 | `thinking` | `true` / `false` | reasoning on/off (`ctrl+t`, `/think on\|off`) |
 | `thinkingAuto` | `true` / `false` | with thinking on, pick the level per prompt, at most `thinkingLevel` (`/think auto [low\|medium\|high]`; default `false`) |
-| `thinkingLevel` | `low` / `medium` / `high` | effort when thinking is on; the cap in auto (`/think low\|medium\|high`) |
+| `thinkingLevel` | `low` / `medium` / `high` | effort when thinking is on (`/think low\|medium\|high`: always that level); the cap in auto (`/think auto low\|medium\|high`) |
 | `showThinking` | `true` / `false` | show the thinking text live, then folded (`/think show\|hide`; `ctrl+o` always shows it) |
 | `fullscreen` | `true` (default) / `false` | full-screen TUI: click to expand one item, wheel to scroll, drag to copy. `false` prints the conversation into the terminal's scrollback instead (the terminal's own scrolling and selection; `ctrl+o` only) |
 | `permissionMode` | `default` (ask) / `acceptEdits` (alias `edit`) / `plan` (read-only) / `bypass` (ask only for destructive commands and protected paths) / `dangerous` (never ask) | startup mode; `shift+tab` and `/mode` change it here too, so the new mode applies to every project from then on |

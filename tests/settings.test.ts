@@ -112,8 +112,9 @@ describe('/think', () => {
     const state = () => ({ thinking: agent.thinking, thinkingAuto: agent.thinkingAuto, thinkingLevel: agent.thinkingLevel });
     expect((await think.run(app, 'auto high')).output).toMatch(/at most high/);
     expect(state()).toEqual({ thinking: true, thinkingAuto: true, thinkingLevel: 'high' });
-    await think.run(app, 'low'); // a level alone keeps auto: it lowers the cap
-    expect(state()).toEqual({ thinking: true, thinkingAuto: true, thinkingLevel: 'low' });
+    await think.run(app, 'low'); // a level alone: always that level, auto off
+    expect(state()).toEqual({ thinking: true, thinkingAuto: false, thinkingLevel: 'low' });
+    await think.run(app, 'auto low');
     await think.run(app, 'off');
     expect(state()).toEqual({ thinking: false, thinkingAuto: true, thinkingLevel: 'low' });
     await think.run(app, 'on medium');
