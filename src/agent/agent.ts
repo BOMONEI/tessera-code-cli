@@ -126,6 +126,44 @@ export function withoutImages(messages: ModelMessage[]): ModelMessage[] {
   );
 }
 
+/**
+ * A bracketed "this turn failed" note at the start of an answer: our own failure notes, and the marker some providers
+ * put in place of an empty assistant turn. Models (thinking off especially) copy such notes from the history into the
+ * start of their next answer, so the history never shows them as assistant text and answers are cleaned of them.
+ */
+const FAILURE_NOTE = /^\s*\[(assistant turn failed[^\]\n]*|the previous request failed|interrupted by user)\]\s*/i;
+const INTERRUPTED_NOTE = '[Interrupted by user]';
+const FAILED_NOTE = '[The previous request failed]';
+
+/** Removes a failure note from the start of an answer. */
+export function stripFailureNote(text: string): string {
+  return text.replace(FAILURE_NOTE, '');
+}
+
+/**
+ * History as sent to (and kept for) the model: assistant text starting with a failure note loses it; an assistant
+ * message left with nothing visible (no text, no tool call: a reasoning-only step, or a note written as assistant
+ * text by older versions) becomes a user note or is dropped, since providers render it as a failure marker.
+ */
+export function cleanHistory(messages: ModelMessage[]): ModelMessage[] {
+  const out: ModelMessage[] = [];
+  for (const m of messages) {
+    if (m.role !== 'assistant') {
+      out.push(m);
+      continue;
+    }
+    const note = typeof m.content === 'string' ? m.content.trim() : '';
+    if (note === INTERRUPTED_NOTE || note === FAILED_NOTE) {
+      out.push({ role: 'user', content: note });
+      continue;
+    }
+    const content = typeof m.content === 'string' ? stripFailureNote(m.content) : m.content.map((p) => (p.type === 'text' ? { ...p, text: stripFailureNote(p.text) } : p));
+    const visible = typeof content === 'string' ? content.trim() !== '' : content.some((p) => (p.type === 'text' && p.text.trim() !== '') || p.type === 'tool-call');
+    if (visible) out.push({ ...m, content } as ModelMessage);
+  }
+  return out;
+}
+
 /** Typical vision-token cost of one image, for context estimates. */
 const IMAGE_TOKENS = 1_500;
 
@@ -378,7 +416,7 @@ export class Agent {
         : images.length
           ? [{ role: 'user', content: [{ type: 'text', text: input }, ...images.map((i) => ({ type: 'file' as const, data: i.data, mediaType: i.mediaType }))] }]
           : [{ role: 'user', content: input }];
-    let history = [...this.messages, ...added];
+    let history = cleanHistory([...this.messages, ...added]);
     const turn: Usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cost: 0 };
     this.turnUsage = turn;
     // Writing time: from a step's first output to its end (tool runs and waiting for the first token excluded).
@@ -471,17 +509,48 @@ export class Agent {
       },
     });
 
+    // The start of each text block is held back while it could still be a failure note (stripFailureNote), and the
+    // blank lines after a removed note with it.
+    let lead: string | undefined;
+    let noteRemoved = false;
+    const flushLead = (): AgentEvent | undefined => {
+      const text = lead === undefined ? '' : noteRemoved ? lead.trimStart() : lead;
+      lead = undefined;
+      noteRemoved = false;
+      return text ? { type: 'text', text } : undefined;
+    };
     try {
       for await (const part of result.fullStream) {
         while (notices.length) yield notices.shift()!;
+        if (part.type === 'text-start') lead = '';
+        else if (lead !== undefined && part.type !== 'text-delta') {
+          const e = flushLead();
+          if (e) yield e;
+        }
         if (part.type === 'text-delta' || part.type === 'reasoning-delta' || part.type === 'tool-input-start' || part.type === 'tool-call') {
           firstOutputAt ??= performance.now();
           stepOutputAt ??= performance.now();
         }
         switch (part.type) {
-          case 'text-delta':
-            yield { type: 'text', text: part.text };
+          case 'text-delta': {
+            if (lead === undefined) {
+              yield { type: 'text', text: part.text };
+              break;
+            }
+            lead += part.text;
+            const head = lead.trimStart();
+            // Undecided while it is a "[" not yet closed (a note is short), or only whitespace so far.
+            if (head === '' || (head.startsWith('[') && !head.includes(']') && head.length < 80)) break;
+            const stripped = stripFailureNote(lead);
+            if (stripped !== lead) {
+              lead = stripped;
+              noteRemoved = true;
+              if (!stripped.trim()) break; // the answer itself has not started yet
+            }
+            const e = flushLead();
+            if (e) yield e;
             break;
+          }
           case 'reasoning-delta':
             yield { type: 'reasoning', text: part.text };
             break;
@@ -532,6 +601,9 @@ export class Agent {
       failed = true;
       if (!signal?.aborted) yield { type: 'error', message: errorMessage(e) };
     }
+    const rest = flushLead();
+    if (rest) yield rest;
+    completed = cleanHistory(completed);
     while (notices.length) yield notices.shift()!;
     this.turnUsage = undefined;
     // Interrupted before any output: the turn never happened (the UI hands the prompt back for editing).
@@ -568,15 +640,8 @@ export class Agent {
     }
     // Keep finished steps so the model remembers edits already applied; drop only the partial last step
     // (a tool call without its result would make the next request invalid).
-    this.messages = [
-      ...history,
-      ...completed,
-      { role: 'assistant', content: signal?.aborted ? '[Interrupted by user]' : '[The previous request failed]' },
-    ];
-    if (completed.at(-1)?.role === 'assistant') {
-      // Two assistant messages in a row are rejected by some providers; merge the note into a user turn instead.
-      this.messages[this.messages.length - 1] = { role: 'user', content: signal?.aborted ? '[Interrupted by user]' : '[The previous request failed]' };
-    }
+    // The note is a user message, never assistant text: the model would copy it into its next answer.
+    this.messages = [...history, ...completed, { role: 'user', content: signal?.aborted ? INTERRUPTED_NOTE : FAILED_NOTE }];
   }
 }
 

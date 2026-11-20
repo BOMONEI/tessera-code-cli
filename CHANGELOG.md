@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.2 — 2026-11-20
+
+### Fixed
+- Answers (mostly with thinking off) no longer start with `[assistant turn failed before producing content]` or a
+  similar note. A failed or interrupted turn is remembered as a note from the user instead of the model's own text,
+  steps without visible output are left out of the history, and a note the model still writes is removed. Existing
+  sessions are cleaned when they are continued.
+
 ## 0.7.1 — 2026-11-20
 
 ### Changed
