@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.3 — 2026-11-20
+
+### Changed
+- Expanding a tool call (click or `ctrl+o`) now shows its whole command too, with its line breaks (heredocs, long
+  `&&` chains), not only its full output. A command that was cut can be expanded even when its output is short.
+
 ## 0.7.2 — 2026-11-20
 
 ### Fixed

@@ -150,3 +150,23 @@ describe('turn summary', () => {
     expect(formatTiming({ elapsedMs: 2_000 })).toBe('⏱ 2.0s');
   });
 });
+
+describe('tool call label', () => {
+  it('shows a long or multi-line command in full when expanded', async () => {
+    const { toolLabel, toolLabelFull } = await import('../src/ui/format.js');
+    const command = `cd /repo && cat > notes.txt <<'X'\nfirst line\nsecond line\nX\nnpm test -- --reporter verbose ${'--flag '.repeat(12)}`;
+    const item: HistoryItem = { id: 1, kind: 'tool', label: toolLabel('bash', { command }), fullLabel: toolLabelFull('bash', { command }), output: 'ok' };
+    const folded = strip(await draw(item, false, 200));
+    expect(folded).toContain('…');
+    expect(folded).toContain('ctrl+o to expand');
+    expect(folded).not.toContain('\n  second line'); // one line, cut at 80 characters
+    const open = strip(await draw(item, true, 200));
+    expect(open).toContain('  first line\n  second line'); // line breaks kept, indented under the bullet
+    expect(open).toContain('--flag --flag)'); // the end, which the folded label cut off
+    // A short call has nothing more to show.
+    expect(toolLabelFull('bash', { command: 'npm test' })).toBeUndefined();
+    const { isExpandable } = await import('../src/ui/tui/components.js');
+    expect(isExpandable({ id: 2, kind: 'tool', label: 'bash(npm test)', output: 'ok' })).toBe(false);
+    expect(isExpandable(item)).toBe(true);
+  });
+});

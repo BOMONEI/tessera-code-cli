@@ -11,7 +11,7 @@ import type { App as Core } from '../../app.js';
 import type { Decision, PermissionMode, PermissionRequest } from '../../permissions.js';
 import { loadCommands, runCommand, type Choice, type CommandResult } from '../../commands.js';
 import { GO_LIMITS, spendWindows, type SpendWindows } from '../../cost/ledger.js';
-import { formatTiming, formatTokens, formatUsage, gitBranch, hasSecret, maskSecretInput, notify, outputText, redactSecret, tildePath, toolLabel } from '../format.js';
+import { formatTiming, formatTokens, formatUsage, gitBranch, hasSecret, maskSecretInput, notify, outputText, redactSecret, tildePath, toolLabel, toolLabelFull } from '../format.js';
 import { streamTail, trimBlock, visualRows } from '../text.js';
 import { loadMarkdown, markdown } from '../lazy-markdown.js';
 import { appendInputHistory, loadInputHistory, searchHistory } from '../history.js';
@@ -560,7 +560,7 @@ export function TuiApp({
       const controller = startBusy('Thinking');
       turnRef.current = true;
       const started = Date.now();
-      const labels = new Map<string, string>();
+      const labels = new Map<string, { label: string; fullLabel?: string }>();
       let failed = false;
       let discarded = false;
       try {
@@ -593,11 +593,11 @@ export function TuiApp({
             case 'tool-call':
               flushReasoning();
               flushStream();
-              labels.set(ev.id, toolLabel(ev.name, ev.input));
+              labels.set(ev.id, { label: toolLabel(ev.name, ev.input), fullLabel: toolLabelFull(ev.name, ev.input) });
               setStatus(`Running ${toolLabel(ev.name, ev.input)}`);
               break;
             case 'tool-result':
-              push({ kind: 'tool', label: labels.get(ev.id) ?? ev.name, output: outputText(ev.output), isError: ev.isError });
+              push({ kind: 'tool', label: ev.name, ...labels.get(ev.id), output: outputText(ev.output), isError: ev.isError });
               for (const d of pendingDiffs.current.splice(0)) push({ kind: 'diff', ...d });
               setStatus('Thinking');
               break;

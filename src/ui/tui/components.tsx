@@ -11,8 +11,11 @@ export type HistoryItem =
   | { id: number; kind: 'user'; text: string }
   /** Raw markdown, rendered at the current width each time the history is drawn (so resizes reflow it). */
   | { id: number; kind: 'assistant'; markdown: string }
-  /** `output`: the full result, shown with ctrl+o (expanded view); otherwise the first `lines` lines. */
-  | { id: number; kind: 'tool'; label: string; preview?: string; output?: string; lines?: number; isError?: boolean }
+  /**
+   * `output`: the full result, shown with ctrl+o (expanded view); otherwise the first `lines` lines. `fullLabel`: the
+   * call with its argument uncut (a long or multi-line command), shown instead of `label` when expanded.
+   */
+  | { id: number; kind: 'tool'; label: string; fullLabel?: string; preview?: string; output?: string; lines?: number; isError?: boolean }
   /** First run after an update: one line when collapsed, the release notes in the expanded view (ctrl+o). */
   | { id: number; kind: 'changelog'; version: string; from: string; count: number; markdown: string }
   /** The model's thinking: one line when collapsed, the full text in the expanded view. */
@@ -42,7 +45,7 @@ export function isExpandable(item: HistoryItem): boolean {
     case 'reasoning':
       return true;
     case 'tool':
-      return item.output !== undefined && toolPreview(item.output, item.lines) !== item.output;
+      return item.fullLabel !== undefined || (item.output !== undefined && toolPreview(item.output, item.lines) !== item.output);
     case 'diff':
       return item.diff.split('\n').filter((l) => !l.startsWith('\\')).length > (item.maxLines ?? 30);
     default:
@@ -142,12 +145,14 @@ export function HistoryView({
       const preview = item.output !== undefined ? toolPreview(item.output, item.lines) : item.preview;
       const more = item.output !== undefined && preview !== item.output;
       const shown = expanded && item.output !== undefined ? capLines(full, EXPANDED_MAX_LINES) : preview;
+      const label = expanded && item.fullLabel ? capLines(item.fullLabel, EXPANDED_MAX_LINES).replace(/\n/g, '\n  ') : item.label;
       return (
         <Box flexDirection="column" marginTop={1}>
           <Text>
             <Text color={item.isError ? 'red' : 'cyan'}>● </Text>
-            <Text bold>{item.label}</Text>
-            {more ? foldHint : null}
+            <Text bold>{label}</Text>
+            {more || item.fullLabel ? foldHint : null}
+            {item.fullLabel && !more && !expanded ? <Text dimColor italic> ({expandHint})</Text> : null}
           </Text>
           {shown ? <Text dimColor>{shown.replace(/^/gm, '  ⎿ ')}</Text> : null}
           {more && !expanded ? <Text dimColor italic>    ({expandHint})</Text> : null}

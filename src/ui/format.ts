@@ -11,12 +11,21 @@ export const green = (s: string) => styleText('green', s);
 export const yellow = (s: string) => styleText('yellow', s);
 export const cyan = (s: string) => styleText('cyan', s);
 
+function toolArg(input: unknown): string {
+  const i = (input ?? {}) as Record<string, unknown>;
+  return String(i.path ?? i.command ?? i.pattern ?? i.url ?? i.description ?? i.name ?? '');
+}
+
 /** One-line summary of a tool call, e.g. `read(src/cli.ts)` or `bash(npm test)`. */
 export function toolLabel(name: string, input: unknown): string {
-  const i = (input ?? {}) as Record<string, unknown>;
-  const arg = i.path ?? i.command ?? i.pattern ?? i.url ?? i.description ?? i.name ?? '';
-  const s = String(arg).replace(/\s+/g, ' ');
+  const s = toolArg(input).replace(/\s+/g, ' ');
   return `${name}(${s.length > 80 ? s.slice(0, 79) + '…' : s})`;
+}
+
+/** The tool call with its argument in full, line breaks kept (the expanded view); undefined when toolLabel shows it all. */
+export function toolLabelFull(name: string, input: unknown): string | undefined {
+  const full = `${name}(${toolArg(input).trim()})`;
+  return full === toolLabel(name, input) ? undefined : full;
 }
 
 /** A tool result as display text. */
