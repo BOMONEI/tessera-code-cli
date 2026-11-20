@@ -7,7 +7,7 @@ import { complete } from './completion.js';
 import { iconAnsi } from './logo.js';
 import { VERSION } from '../version.js';
 import { suggestFiles } from '../agent/attachments.js';
-import { bold, colorDiff, cyan, dim, formatTiming, formatTokens, formatUsage, red, toolLabel, toolPreview, yellow } from './format.js';
+import { bold, colorDiff, cyan, dim, formatClock, formatTiming, formatTokens, formatUsage, red, toolLabel, toolPreview, yellow } from './format.js';
 
 /** Plain readline front end (Phase 2). The Ink TUI supersedes it for interactive use. */
 export class Repl {
@@ -120,7 +120,7 @@ export class Repl {
             stdout.write(dim(toolPreview(ev.output).replace(/^/gm, '  ⎿ ')) + '\n');
             break;
           case 'turn-finish':
-            stdout.write(`\n${dim(`${formatTiming(ev)} · ${formatUsage(ev.usage)} · context ${formatTokens(agent.contextTokens)}/${formatTokens(agent.contextLimit)}`)}\n`);
+            stdout.write(`\n${dim(`${formatTiming(ev)} · ${formatUsage(ev.usage)} · context ${formatTokens(agent.contextTokens)}/${formatTokens(agent.contextLimit)} · ${formatClock()}`)}\n`);
             break;
           case 'info':
             stdout.write(dim(`${ev.text}\n`));

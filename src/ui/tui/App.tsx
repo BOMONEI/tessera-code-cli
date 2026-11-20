@@ -11,7 +11,7 @@ import type { App as Core } from '../../app.js';
 import type { Decision, PermissionMode, PermissionRequest } from '../../permissions.js';
 import { loadCommands, runCommand, type Choice, type CommandResult } from '../../commands.js';
 import { GO_LIMITS, spendWindows, type SpendWindows } from '../../cost/ledger.js';
-import { formatTiming, formatTokens, formatUsage, gitBranch, hasSecret, maskSecretInput, notify, outputText, redactSecret, tildePath, toolLabel, toolLabelFull } from '../format.js';
+import { formatClock, formatTiming, formatTokens, formatUsage, gitBranch, hasSecret, maskSecretInput, notify, outputText, redactSecret, tildePath, toolLabel, toolLabelFull } from '../format.js';
 import { streamTail, trimBlock, visualRows } from '../text.js';
 import { loadMarkdown, markdown } from '../lazy-markdown.js';
 import { appendInputHistory, loadInputHistory, searchHistory } from '../history.js';
@@ -625,7 +625,7 @@ export function TuiApp({
               }
               flushReasoning();
               flushStream();
-              push({ kind: 'info', text: `${formatTiming(ev)} · ${formatUsage(ev.usage)}` });
+              push({ kind: 'info', text: `${formatTiming(ev)} · ${formatUsage(ev.usage)} · ${formatClock()}` });
               break;
             case 'error':
               failed = true;

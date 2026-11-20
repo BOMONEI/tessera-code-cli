@@ -131,6 +131,14 @@ export function formatTiming(ev: { elapsedMs: number; firstOutputMs?: number; ou
   return `⏱ ${formatDuration(ev.elapsedMs)}${parts.length ? ` (${parts.join(' · ')})` : ''}`;
 }
 
+/** Local date and time as "2026.11.20 12:20 PM", appended to the end of the turn summary line. */
+export function formatClock(at: Date = new Date()): string {
+  const p = (n: number) => String(n).padStart(2, '0');
+  const h24 = at.getHours();
+  const hour = h24 % 12 || 12;
+  return `${at.getFullYear()}.${p(at.getMonth() + 1)}.${p(at.getDate())} ${hour}:${p(at.getMinutes())} ${h24 < 12 ? 'AM' : 'PM'}`;
+}
+
 export function formatUsage(u: Usage): string {
   return `${formatTokens(u.inputTokens)} in (${formatTokens(u.cacheReadTokens)} cached) · ${formatTokens(u.outputTokens)} out · $${u.cost.toFixed(4)}`;
 }

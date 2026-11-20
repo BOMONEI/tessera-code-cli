@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { App } from '../app.js';
 import type { Choice, CommandResult } from '../commands.js';
 import type { PermissionMode, PermissionRequest } from '../permissions.js';
-import { formatTiming, formatTokens, formatUsage, outputText, redactSecret, toolLabel } from '../ui/format.js';
+import { formatClock, formatTiming, formatTokens, formatUsage, outputText, redactSecret, toolLabel } from '../ui/format.js';
 import { transcriptOf } from '../ui/transcript.js';
 import type { Decision, RemoteEvent, Sequenced, SessionState } from './protocol.js';
 

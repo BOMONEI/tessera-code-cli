@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.5 — 2026-11-20
+
+### Added
+- The turn summary line at the end of a turn now ends with the local date and time it finished, e.g.
+  `⏱ 24m 16s (…) · 5.7M in (5.7M cached) · 9.7k out · $0.0212 · 2026.11.20 12:20 PM`, in the TUI, the REPL,
+  print mode and the remote turn-finish summary.
+
 ## 0.7.4 — 2026-11-20
 
 ### Fixed

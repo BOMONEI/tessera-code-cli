@@ -7,7 +7,7 @@ import type { HistoryItem } from '../src/ui/tui/components.js';
 process.env.FORCE_COLOR = '3';
 const { render } = await import('ink');
 const { HistoryView } = await import('../src/ui/tui/components.js');
-const { colorDiff, diffLineNumbers, formatTiming, outputText } = await import('../src/ui/format.js');
+const { colorDiff, diffLineNumbers, formatClock, formatTiming, outputText } = await import('../src/ui/format.js');
 const { transcriptOf } = await import('../src/ui/transcript.js');
 
 const strip = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
@@ -148,6 +148,12 @@ describe('turn summary', () => {
     // Too short to measure a rate, or nothing written yet.
     expect(formatTiming({ elapsedMs: 900, firstOutputMs: 800, outputMs: 100, usage: { outputTokens: 5 } })).toBe('⏱ 900ms (first token 800ms)');
     expect(formatTiming({ elapsedMs: 2_000 })).toBe('⏱ 2.0s');
+  });
+
+  it('appends the local date and time as "2026.11.20 12:20 PM"', () => {
+    expect(formatClock(new Date(2026, 10, 20, 12, 20))).toBe('2026.11.20 12:20 PM');
+    expect(formatClock(new Date(2026, 0, 5, 9, 5))).toBe('2026.01.05 9:05 AM');
+    expect(formatClock(new Date(2026, 11, 31, 0, 0))).toBe('2026.12.31 12:00 AM');
   });
 });
 

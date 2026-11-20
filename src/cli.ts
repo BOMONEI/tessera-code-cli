@@ -7,7 +7,7 @@ import type { PromptFn } from './permissions.js';
 import type { TuiBridge } from './ui/tui/App.js';
 // Everything heavier (AI SDK, Ink/React, markdown) is imported where it is needed: `-v`, `sessions` and `-p`
 // should not pay for the TUI, and the TUI modules load while the app is being set up.
-import { dim, formatTiming, formatTokens, formatUsage, red, toolLabel, yellow } from './ui/format.js';
+import { dim, formatClock, formatTiming, formatTokens, formatUsage, red, toolLabel, yellow } from './ui/format.js';
 import { createInterface } from 'node:readline/promises';
 
 // The SDK prints provider compatibility warnings to stderr; they are noise for an interactive CLI.
@@ -50,7 +50,7 @@ async function runPrint(app: App, input: string): Promise<void> {
       stderr.write(yellow(`${midLine ? '\n' : ''}↪ ${ev.from} ${ev.reason}; switched to ${ev.to}\n`));
       midLine = false;
     } else if (ev.type === 'turn-finish') {
-      stderr.write(dim(`\n${formatTiming(ev)} · ${formatUsage(ev.usage)} · context ${formatTokens(app.agent.contextTokens)}\n`));
+      stderr.write(dim(`\n${formatTiming(ev)} · ${formatUsage(ev.usage)} · context ${formatTokens(app.agent.contextTokens)} · ${formatClock()}\n`));
     } else if (ev.type === 'error') {
       failed = true;
       stderr.write(red(`✗ ${ev.message}\n`));
