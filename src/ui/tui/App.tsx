@@ -1255,9 +1255,9 @@ export function TuiApp({
             </Text>
           </Box>
         ) : null}
-        <Box paddingX={1}>
+        <Box justifyContent="space-between" paddingX={1}>
           <Text wrap="truncate">
-            <Text color="blue">{middleEllipsis(where, Math.max(12, size.columns - 4 - (branch ? stringWidth(branch) + 4 : 0) - (flash ? stringWidth(flash.text) + 2 : 0)))}</Text>
+            <Text color="blue">{middleEllipsis(where, Math.max(12, size.columns - 4 - (branch ? stringWidth(branch) + 4 : 0) - (flash ? stringWidth(flash.text) + 2 : 0) - (usageBarWidth('ctx', ctxPct, ctxLimit) + 1)))}</Text>
             {branch ? <Text color="green">{'  ⎇ '}{branch}</Text> : null}
             {flash ? (
               <Text color={flash.ok ? 'greenBright' : 'red'} bold>
@@ -1265,6 +1265,9 @@ export function TuiApp({
                 {flash.text}
               </Text>
             ) : null}
+          </Text>
+          <Text wrap="truncate">
+            <UsageBar label="ctx" percent={ctxPct} suffix={ctxLimit} />
           </Text>
         </Box>
         <Box paddingX={1}>
@@ -1296,13 +1299,12 @@ export function TuiApp({
             {update ? <Text color="yellow">{` · ↑ ${update} (tessera-code update)`}</Text> : null}
           </Text>
         </Box>
-        {/* The usage gauges get their own last line: context, then the Go spend windows. */}
-        <Box paddingX={1}>
+        {/* The Go spend gauges get their own last line, right-aligned; context stays on the path line. */}
+        <Box paddingX={1} justifyContent="flex-end">
           <Text wrap="truncate">
-            <UsageBar label="ctx" percent={ctxPct} suffix={ctxLimit} />
-            {bars.map((b) => (
+            {bars.map((b, i) => (
               <Fragment key={b.label}>
-                {'  '}
+                {i > 0 ? '  ' : ''}
                 <UsageBar label={b.label} percent={b.percent} />
               </Fragment>
             ))}

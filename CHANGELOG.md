@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.8 — 2026-11-20
+
+### Changed
+- The footer is three lines: the path with the context gauge at its right end, the model line, and the Go spend
+  gauges (5h/week/month) on their own last line, right-aligned. This also fixes the missing gap between the context
+  and 5-hour gauges, and narrow terminals no longer fold the footer.
+
 ## 0.7.7 — 2026-11-20
 
 ### Changed
