@@ -164,6 +164,24 @@ export function cleanHistory(messages: ModelMessage[]): ModelMessage[] {
   return out;
 }
 
+/** Drops a trailing assistant whose tool calls never got their results (the step was soft-interrupted mid-run). */
+function dropPartialStep(messages: ModelMessage[]): ModelMessage[] {
+  const out = [...messages];
+  while (out.length) {
+    const last = out.at(-1)!;
+    if (last.role !== 'assistant') break;
+    const calls = Array.isArray(last.content) ? last.content.filter((p) => p.type === 'tool-call') : [];
+    const results = new Set(
+      out
+        .slice(out.indexOf(last) + 1)
+        .flatMap((m) => (m.role === 'tool' && Array.isArray(m.content) ? m.content.map((p) => (p.type === 'tool-result' ? p.toolCallId : '')) : [])),
+    );
+    if (!calls.length || calls.every((c) => results.has(c.toolCallId))) break;
+    out.pop();
+  }
+  return out;
+}
+
 /** Typical vision-token cost of one image, for context estimates. */
 const IMAGE_TOKENS = 1_500;
 
@@ -226,6 +244,8 @@ export class Agent {
   private models = new Map<string, LanguageModelV4>();
   /** Messages sent during a turn, delivered before its next step. */
   private interjections: string[] = [];
+  /** The running attempt's abort; interruptStep() cancels it to cut in without ending the turn. */
+  private stepAbort?: AbortController;
   /** Images tools asked to show (read of an image or document), sent with the next step's request. */
   private toolImages: Array<{ label: string; images: ImageInput[] }> = [];
 
@@ -297,6 +317,11 @@ export class Agent {
   /** Delivers `text` to the running turn before its next step (after the current tool calls finish). */
   interject(text: string): void {
     this.interjections.push(text);
+  }
+
+  /** Soft-interrupt (ctrl+enter): cancels only the running step. The turn goes on and queued messages are injected at once. */
+  interruptStep(): void {
+    this.stepAbort?.abort();
   }
 
   /** Takes back a message sent with interject() that the turn has not read yet; false once it was delivered. */
@@ -385,7 +410,7 @@ export class Agent {
       yield { type: 'error', message: `${this.model.id} cannot read images. Switch to a model that can (e.g. /model mimo-v2.6-flash) or remove the image.` };
       return;
     }
-    const incoming = (typeof input === 'string' ? Math.ceil(input.length / 4) : estimateTokens(input)) + images.length * IMAGE_TOKENS;
+    const incoming = (typeof input === 'string' ? textTokens(input) : estimateTokens(input)) + images.length * IMAGE_TOKENS;
     if (this.messages.length && this.contextTokens + incoming >= this.contextLimit) {
       const before = this.contextTokens;
       try {
@@ -434,81 +459,6 @@ export class Agent {
     // response (the SDK runs tools only then). Off when hooks are configured: a call the SDK ends up not running
     // (truncated step) must not fire hooks.
     const tools = this.opts.earlyTools === false ? this.tools : speculative(this.tools);
-    const result = streamText({
-      model: this.languageModel(
-        (m) => (served = m),
-        (e) => notices.push({ type: 'fallback', ...e }),
-        hasImages(history),
-      ),
-      system: this.system,
-      // Images from earlier turns are replaced by a note when the current model cannot read them.
-      messages: this.model.images ? history : withoutImages(history),
-      tools,
-      stopWhen: isStepCount(this.opts.maxSteps),
-      maxOutputTokens: Math.min(this.model.output, MAX_OUTPUT_TOKENS),
-      // Mapped to reasoning_effort / thinking budgets per provider; non-reasoning models get no parameter. The level is
-      // always explicit: leaving it to the provider default answered noticeably later on OpenCode Go.
-      reasoning: this.model.reasoning ? this.turnLevel : undefined,
-      maxRetries: (this.opts.fallback?.models.length ?? 0) > 0 ? 0 : 2, // the fallback chain is the retry policy
-      abortSignal: signal,
-      onError: () => {}, // surfaced through the 'error' stream part instead
-      onStepEnd: (step) => {
-        completed.push(...step.response.messages);
-      },
-      // Between steps: compact when a long tool loop outgrew the limit, and hand over messages the user sent
-      // while the agent was working (they steer the rest of this turn instead of waiting for it to end).
-      prepareStep: async ({ steps, messages }) => {
-        let next: ModelMessage[] | undefined;
-        const last = steps.at(-1);
-        const toolOutput = last ? estimateTokens(last.response.messages.filter((m) => m.role === 'tool')) : 0;
-        const estimate = last ? (last.usage.inputTokens ?? 0) + (last.usage.outputTokens ?? 0) + toolOutput : 0;
-        // Over contextLimit the turn goes on (it compacts after finishing); only the model's real window forces it now.
-        if (last && estimate >= this.hardContextLimit && !compactionFailed) {
-          try {
-            const r = await summarize({ model: this.model, apiKey: this.opts.apiKey, sessionId: this.opts.sessionId, messages, abortSignal: signal, onProgress: this.onCompactProgress });
-            const u = toUsage(this.model, { inputTokens: r.inputTokens, outputTokens: r.outputTokens } as LanguageModelUsage);
-            this.addUsage(turn, u);
-            this.addUsage(this.total, u);
-            this.spend(u.cost);
-            history = [...compactedHistory(r.summary), { role: 'user', content: CONTINUE_AFTER_COMPACTION }];
-            completed = [];
-            this.replaceHistory(history);
-            notices.push({ type: 'compacted', before: estimate, summary: r.summary });
-            next = history;
-          } catch (e) {
-            if (signal?.aborted) throw e;
-            compactionFailed = true; // the context will not shrink; do not retry (and pay) on every remaining step
-            notices.push({ type: 'error', message: `Auto-compaction failed: ${errorMessage(e)}` });
-          }
-        }
-        // One user message after the tool results: images the tools showed, then messages the user typed meanwhile.
-        const parts: Array<{ type: 'text'; text: string } | { type: 'file'; data: string; mediaType: string }> = [];
-        if (last) {
-          for (const { label, images } of this.toolImages.splice(0)) {
-            parts.push({ type: 'text', text: label }, ...images.map((i) => ({ type: 'file' as const, data: i.data, mediaType: i.mediaType })));
-          }
-        }
-        const texts = last ? this.interjections.splice(0) : [];
-        if (texts.length) parts.push({ type: 'text', text: `${INTERJECTION_PREFIX}\n${texts.join('\n\n')}` });
-        if (parts.length) {
-          if (next) {
-            // Just compacted: the history ends with the "continue" user message; fold these into it rather than
-            // sending two user messages in a row.
-            const merged: ModelMessage = { role: 'user', content: [{ type: 'text', text: CONTINUE_AFTER_COMPACTION }, ...parts] };
-            next = [...next.slice(0, -1), merged];
-            history = next;
-            this.replaceHistory(history);
-          } else {
-            const message: ModelMessage = { role: 'user', content: parts.length === 1 && parts[0]!.type === 'text' ? parts[0]!.text : parts };
-            completed.push(message); // part of the turn's history, in order after the steps so far
-            next = [...messages, message];
-          }
-          for (const text of texts) notices.push({ type: 'interjection', text });
-        }
-        return next ? { messages: next } : undefined;
-      },
-    });
-
     // The start of each text block is held back while it could still be a failure note (stripFailureNote), and the
     // blank lines after a removed note with it.
     let lead: string | undefined;
@@ -519,88 +469,196 @@ export class Agent {
       noteRemoved = false;
       return text ? { type: 'text', text } : undefined;
     };
-    try {
-      for await (const part of result.fullStream) {
-        while (notices.length) yield notices.shift()!;
-        if (part.type === 'text-start') lead = '';
-        else if (lead !== undefined && part.type !== 'text-delta') {
-          const e = flushLead();
-          if (e) yield e;
-        }
-        if (part.type === 'text-delta' || part.type === 'reasoning-delta' || part.type === 'tool-input-start' || part.type === 'tool-call') {
-          firstOutputAt ??= performance.now();
-          stepOutputAt ??= performance.now();
-        }
-        switch (part.type) {
-          case 'text-delta': {
-            if (lead === undefined) {
-              yield { type: 'text', text: part.text };
-              break;
+    // The attempt loop: one streamText call runs the steps (the SDK drives them). A soft interrupt (interruptStep)
+    // cancels only the running attempt: the turn restarts with the history so far and the queued messages are
+    // injected at once. Steps finished so far count against maxSteps across restarts.
+    let stepsSoFar = 0;
+    let afterInterrupt = false;
+    for (;;) {
+      let cutIn = false;
+      const attempt = new AbortController();
+      this.stepAbort = attempt;
+      const attempted = (stepsSoFar || afterInterrupt) && completed.length ? [...history, ...completed] : history;
+      const result = streamText({
+        model: this.languageModel(
+          (m) => (served = m),
+          (e) => notices.push({ type: 'fallback', ...e }),
+          hasImages(attempted),
+        ),
+        system: this.system,
+        // Images from earlier turns are replaced by a note when the current model cannot read them.
+        messages: this.model.images ? attempted : withoutImages(attempted),
+        tools,
+        stopWhen: isStepCount(Math.max(1, this.opts.maxSteps - stepsSoFar)), // a restart must not buy extra steps
+        maxOutputTokens: Math.min(this.model.output, MAX_OUTPUT_TOKENS),
+        // Mapped to reasoning_effort / thinking budgets per provider; non-reasoning models get no parameter. The level is
+        // always explicit: leaving it to the provider default answered noticeably later on OpenCode Go.
+        reasoning: this.model.reasoning ? this.turnLevel : undefined,
+        maxRetries: (this.opts.fallback?.models.length ?? 0) > 0 ? 0 : 2, // the fallback chain is the retry policy
+        abortSignal: signal ? AbortSignal.any([signal, attempt.signal]) : attempt.signal,
+        onError: () => {}, // surfaced through the 'error' stream part instead
+        onStepEnd: (step) => {
+          completed.push(...step.response.messages);
+        },
+        // Between steps: compact when a long tool loop outgrew the limit, and hand over messages the user sent
+        // while the agent was working (they steer the rest of this turn instead of waiting for it to end).
+        prepareStep: async ({ steps, messages }) => {
+          let next: ModelMessage[] | undefined;
+          const last = steps.at(-1);
+          const toolOutput = last ? estimateTokens(last.response.messages.filter((m) => m.role === 'tool')) : 0;
+          const estimate = last ? (last.usage.inputTokens ?? 0) + (last.usage.outputTokens ?? 0) + toolOutput : 0;
+          // Over contextLimit the turn goes on (it compacts after finishing); only the model's real window forces it now.
+          if (last && estimate >= this.hardContextLimit && !compactionFailed) {
+            try {
+              const r = await summarize({ model: this.model, apiKey: this.opts.apiKey, sessionId: this.opts.sessionId, messages, abortSignal: signal, onProgress: this.onCompactProgress });
+              const u = toUsage(this.model, { inputTokens: r.inputTokens, outputTokens: r.outputTokens } as LanguageModelUsage);
+              this.addUsage(turn, u);
+              this.addUsage(this.total, u);
+              this.spend(u.cost);
+              history = [...compactedHistory(r.summary), { role: 'user', content: CONTINUE_AFTER_COMPACTION }];
+              completed = [];
+              this.replaceHistory(history);
+              notices.push({ type: 'compacted', before: estimate, summary: r.summary });
+              next = history;
+            } catch (e) {
+              if (signal?.aborted) throw e;
+              compactionFailed = true; // the context will not shrink; do not retry (and pay) on every remaining step
+              notices.push({ type: 'error', message: `Auto-compaction failed: ${errorMessage(e)}` });
             }
-            lead += part.text;
-            const head = lead.trimStart();
-            // Undecided while it is a "[" not yet closed (a note is short), or only whitespace so far.
-            if (head === '' || (head.startsWith('[') && !head.includes(']') && head.length < 80)) break;
-            const stripped = stripFailureNote(lead);
-            if (stripped !== lead) {
-              lead = stripped;
-              noteRemoved = true;
-              if (!stripped.trim()) break; // the answer itself has not started yet
+          }
+          // One user message after the tool results: images the tools showed, then messages the user typed meanwhile.
+          const parts: Array<{ type: 'text'; text: string } | { type: 'file'; data: string; mediaType: string }> = [];
+          if (last) {
+            for (const { label, images } of this.toolImages.splice(0)) {
+              parts.push({ type: 'text', text: label }, ...images.map((i) => ({ type: 'file' as const, data: i.data, mediaType: i.mediaType })));
             }
+          }
+          // A restart's first step has no `last`, but the queued messages must go out just the same.
+          const texts = last || afterInterrupt ? this.interjections.splice(0) : [];
+          afterInterrupt = false;
+          if (texts.length) parts.push({ type: 'text', text: `${INTERJECTION_PREFIX}\n${texts.join('\n\n')}` });
+          if (parts.length) {
+            if (next) {
+              // Just compacted: the history ends with the "continue" user message; fold these into it rather than
+              // sending two user messages in a row.
+              const merged: ModelMessage = { role: 'user', content: [{ type: 'text', text: CONTINUE_AFTER_COMPACTION }, ...parts] };
+              next = [...next.slice(0, -1), merged];
+              history = next;
+              this.replaceHistory(history);
+            } else {
+              const message: ModelMessage = { role: 'user', content: parts.length === 1 && parts[0]!.type === 'text' ? parts[0]!.text : parts };
+              completed.push(message); // part of the turn's history, in order after the steps so far
+              next = [...messages, message];
+            }
+            for (const text of texts) notices.push({ type: 'interjection', text });
+          }
+          return next ? { messages: next } : undefined;
+        },
+      });
+      try {
+        for await (const part of result.fullStream) {
+          while (notices.length) yield notices.shift()!;
+          if (part.type === 'text-start') lead = '';
+          else if (lead !== undefined && part.type !== 'text-delta') {
             const e = flushLead();
             if (e) yield e;
-            break;
           }
-          case 'reasoning-delta':
-            yield { type: 'reasoning', text: part.text };
-            break;
-          case 'tool-input-start':
-            yield { type: 'tool-input-start', id: part.id, name: part.toolName };
-            break;
-          case 'tool-call':
-            yield { type: 'tool-call', id: part.toolCallId, name: part.toolName, input: part.input };
-            break;
-          case 'tool-result':
-            yield { type: 'tool-result', id: part.toolCallId, name: part.toolName, output: part.output, isError: false };
-            break;
-          case 'tool-error':
-            yield { type: 'tool-result', id: part.toolCallId, name: part.toolName, output: errorMessage(part.error), isError: true };
-            break;
-          case 'finish-step': {
-            if (stepOutputAt !== undefined) outputMs += performance.now() - stepOutputAt;
-            stepOutputAt = undefined;
-            const u = toUsage(served, part.usage);
-            this.contextTokens = u.inputTokens + u.outputTokens;
-            this.addUsage(turn, u);
-            this.addUsage(this.total, u);
-            this.spendOn(served.id, u.cost);
-            yield { type: 'step-finish', usage: u };
-            break;
+          if (part.type === 'text-delta' || part.type === 'reasoning-delta' || part.type === 'tool-input-start' || part.type === 'tool-call') {
+            firstOutputAt ??= performance.now();
+            stepOutputAt ??= performance.now();
           }
-          case 'finish':
-            finished = true;
-            yield {
-              type: 'turn-finish',
-              usage: turn,
-              finishReason: part.finishReason,
-              elapsedMs: performance.now() - startedAt,
-              firstOutputMs: firstOutputAt === undefined ? undefined : firstOutputAt - startedAt,
-              outputMs,
-            };
-            break;
-          case 'error':
-            failed = true;
-            if (!signal?.aborted) yield { type: 'error', message: errorMessage(part.error) };
-            break;
-          case 'abort':
-            failed = true;
-            break;
+          switch (part.type) {
+            case 'text-delta': {
+              if (lead === undefined) {
+                yield { type: 'text', text: part.text };
+                break;
+              }
+              lead += part.text;
+              const head = lead.trimStart();
+              // Undecided while it is a "[" not yet closed (a note is short), or only whitespace so far.
+              if (head === '' || (head.startsWith('[') && !head.includes(']') && head.length < 80)) break;
+              const stripped = stripFailureNote(lead);
+              if (stripped !== lead) {
+                lead = stripped;
+                noteRemoved = true;
+                if (!stripped.trim()) break; // the answer itself has not started yet
+              }
+              const e = flushLead();
+              if (e) yield e;
+              break;
+            }
+            case 'reasoning-delta':
+              yield { type: 'reasoning', text: part.text };
+              break;
+            case 'tool-input-start':
+              yield { type: 'tool-input-start', id: part.id, name: part.toolName };
+              break;
+            case 'tool-call':
+              yield { type: 'tool-call', id: part.toolCallId, name: part.toolName, input: part.input };
+              break;
+            case 'tool-result':
+              yield { type: 'tool-result', id: part.toolCallId, name: part.toolName, output: part.output, isError: false };
+              break;
+            case 'tool-error':
+              yield { type: 'tool-result', id: part.toolCallId, name: part.toolName, output: errorMessage(part.error), isError: true };
+              break;
+            case 'finish-step': {
+              stepsSoFar++;
+              if (stepOutputAt !== undefined) outputMs += performance.now() - stepOutputAt;
+              stepOutputAt = undefined;
+              const u = toUsage(served, part.usage);
+              this.contextTokens = u.inputTokens + u.outputTokens;
+              this.addUsage(turn, u);
+              this.addUsage(this.total, u);
+              this.spendOn(served.id, u.cost);
+              yield { type: 'step-finish', usage: u };
+              break;
+            }
+            case 'finish':
+              finished = true;
+              yield {
+                type: 'turn-finish',
+                usage: turn,
+                finishReason: part.finishReason,
+                elapsedMs: performance.now() - startedAt,
+                firstOutputMs: firstOutputAt === undefined ? undefined : firstOutputAt - startedAt,
+                outputMs,
+              };
+              break;
+            case 'error':
+              // A soft interrupt can surface as an error part; it ends the attempt, not the turn.
+              if (attempt.signal.aborted && !signal?.aborted) cutIn = true;
+              else {
+                failed = true;
+                if (!signal?.aborted) yield { type: 'error', message: errorMessage(part.error) };
+              }
+              break;
+            case 'abort':
+              // A soft interrupt ends the attempt, not the turn; the user's own interrupt still ends it.
+              if (attempt.signal.aborted && !signal?.aborted) cutIn = true;
+              else failed = true;
+              break;
+          }
+        }
+      } catch (e) {
+        if (attempt.signal.aborted && !signal?.aborted) cutIn = true;
+        else {
+          failed = true;
+          if (!signal?.aborted) yield { type: 'error', message: errorMessage(e) };
         }
       }
-    } catch (e) {
-      failed = true;
-      if (!signal?.aborted) yield { type: 'error', message: errorMessage(e) };
+      if (cutIn) {
+        // Soft interrupt: drop the partial step (its tool calls never got results), hand the queued messages to the
+        // next attempt's first step, and continue the turn right away.
+        lead = undefined;
+        noteRemoved = false;
+        completed = dropPartialStep(completed);
+        afterInterrupt = true;
+        continue;
+      }
+      break;
     }
+    this.stepAbort = undefined;
     const rest = flushLead();
     if (rest) yield rest;
     completed = cleanHistory(completed);
@@ -645,16 +703,43 @@ export class Agent {
   }
 }
 
-/** Rough token estimate (~4 chars per token) for histories without usage data; images count a fixed amount. */
+/** Hangul, Han, kana: about one token per character, not four. */
+const CJK = /[\p{Script=Hangul}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/gu;
+
+/** Tokens of one text blob: ~4 ASCII characters per token, ~1 token per CJK character. */
+function textTokens(text: string): number {
+  const cjk = text.match(CJK)?.length ?? 0;
+  return cjk + Math.ceil((text.length - cjk) / 4);
+}
+
+/** Tool results carry their text in `value` when structured; anything else counts as its JSON. */
+function outputTextOf(output: unknown): string {
+  const o = output as { type?: string; value?: unknown } | undefined;
+  if (o && typeof o === 'object' && 'type' in o) return typeof o.value === 'string' ? o.value : JSON.stringify(o.value ?? '');
+  return typeof output === 'string' ? output : JSON.stringify(output ?? '');
+}
+
+/** Rough token estimate for histories without usage data: text content only (no JSON overhead), CJK weighted per
+ *  character so Korean histories are not under-counted, and images at a fixed cost. */
 export function estimateTokens(messages: ModelMessage[]): number {
-  if (!messages.length) return 0;
+  let tokens = 0;
   let images = 0;
-  const json = JSON.stringify(messages, (key, value) => {
-    if (isImagePart(value)) {
-      images++;
-      return '[image]';
+  for (const m of messages) {
+    tokens += 8; // roles, ids and the like
+    const parts = typeof m.content === 'string' ? [{ type: 'text' as const, text: m.content }] : m.content;
+    for (const p of parts) {
+      if (isImagePart(p)) {
+        images++;
+      } else if ('text' in p && typeof p.text === 'string') {
+        tokens += textTokens(p.text);
+      } else if (p.type === 'tool-call') {
+        tokens += textTokens(JSON.stringify(p.input ?? ''));
+      } else if (p.type === 'tool-result') {
+        tokens += textTokens(outputTextOf(p.output));
+      } else {
+        tokens += textTokens(JSON.stringify(p));
+      }
     }
-    return value;
-  });
-  return Math.ceil(json.length / 4) + images * IMAGE_TOKENS;
+  }
+  return tokens + images * IMAGE_TOKENS;
 }

@@ -117,12 +117,15 @@ describe('system prompt', () => {
     expect(agentsSection(4)).toContain('run in parallel (up to 4 at a time)');
   });
 
-  it('encourages delegating when subagents are on, and never discourages it', () => {
+  it('casts the agent as the orchestrator when subagents are on, and never discourages delegating', () => {
     for (const section of [agentsSection(1), agentsSection(4)]) {
-      expect(section).toContain('Delegate by default');
+      expect(section).toContain('you are the orchestrator');
+      expect(section).toContain('Delegate before you work');
+      expect(section).toContain('apply to small jobs only');
       expect(section).not.toContain('Do small tasks yourself');
     }
-    expect(agentsSection(4)).toContain('in one response rather than one after another');
+    expect(agentsSection(4)).toContain('run in parallel (up to 4 at a time)');
+    expect(agentsSection(1)).toContain('Subagents run one at a time.');
     const t = taskTool({
       apiKey: 'k',
       model: () => model,
@@ -131,7 +134,7 @@ describe('system prompt', () => {
       agentOptions: () => ({ maxSteps: 5, thinking: false, contextLimit: 500_000 }),
       parallel: () => 1,
     }) as unknown as { task: { description: string } };
-    expect(t.task.description).toContain('Prefer delegating');
+    expect(t.task.description).toContain('You are the orchestrator');
     expect(t.task.description).not.toContain('Do small tasks yourself');
   });
 });

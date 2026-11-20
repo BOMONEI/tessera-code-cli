@@ -806,6 +806,12 @@ export function TuiApp({
   );
   const submitRef = useRef(submit);
   submitRef.current = submit;
+  /** ctrl+enter while the agent works: send what is typed and cut in immediately (the running step is cancelled). */
+  const cutIn = useCallback(() => {
+    if (!turnRef.current) return;
+    if (input.trim()) void submitRef.current(input);
+    core.agent.interruptStep();
+  }, [core, input]);
 
   /** Runs the next queued prompt, unless a picker is open, something is running, or this view was replaced. */
   const drain = async () => {
@@ -1172,7 +1178,7 @@ export function TuiApp({
             <Text dimColor>
               {' '}
               {subagents.length ? `${subagents.filter((s) => s.state === 'running').length} subagent${subagents.length === 1 ? '' : 's'} working` : (status ?? 'Working')}…{' '}
-              {busySince !== undefined ? `${elapsedLabel(Date.now() - busySince)} ` : ''}(esc to interrupt)
+              {busySince !== undefined ? `${elapsedLabel(Date.now() - busySince)} ` : ''}(esc interrupt · ctrl+enter cut in)
             </Text>
           </Box>
         ) : null}
@@ -1213,6 +1219,7 @@ export function TuiApp({
                   historyPos.current = -1;
                 }}
                 onSubmit={(v) => void submit(v)}
+                onImmediate={cutIn}
                 onHistory={(d) => {
                   if (!busy) return browseHistory(d);
                   if (d !== 'older' || input) return undefined;

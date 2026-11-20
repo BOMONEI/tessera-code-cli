@@ -14,6 +14,8 @@ export interface SessionState {
   thinkingLevel?: string;
   /** Absent in sessions saved before thinking auto existed. */
   thinkingAuto?: boolean;
+  /** The last real request size in tokens (the context gauge); sessions saved before this existed fall back to an estimate. */
+  contextTokens?: number;
   mode: string;
   total: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cost: number };
 }

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.7.9 — 2026-11-20
+
+### Added
+- `ctrl+enter` while the agent works: cut in immediately. The running step is cancelled and what you typed goes out
+  at once — the turn continues (a running command is killed; steps still count against the turn's step budget).
+  `esc` still ends the whole turn.
+
+### Changed
+- Subagents and multi-agent now cast the agent as the orchestrator, in the system prompt (right after the working
+  rules) and in the `task` tool: past one or two tool calls, work is handed to a subagent by default. Single-agent
+  sessions are unchanged.
+- The context gauge is restored from the session's last real request size on resume, and the estimator weights
+  Hangul/Han/kana per character (Korean histories were under-counted) and drops JSON overhead, so auto-compaction
+  triggers accurately on Korean-heavy sessions.
+
 ## 0.7.8 — 2026-11-20
 
 ### Changed

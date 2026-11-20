@@ -91,6 +91,7 @@ TUI keys:
 | `@` | file picker (↑↓, tab/enter to insert) |
 | `ctrl+v` | attach the clipboard image (screenshots); dragging image files into the terminal attaches them too |
 | typing while the agent works | the message is delivered after the current step and steers the running turn (`↳`); if the turn was already answering, it runs next. `/` and `!` lines wait for the turn |
+| `ctrl+enter` | while the agent works: send what is typed and cut in immediately — the running step is cancelled and the message goes out at once (the turn continues; a running command is killed). `esc` still ends the whole turn |
 | `!command` | run a shell command directly; its output goes to the model with your next message (earlier `!` commands are suggested) |
 | `ctrl+t` / `shift+tab` | cycle thinking on → auto → off / cycle permission mode |
 | `esc` | interrupt |

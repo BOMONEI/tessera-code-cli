@@ -325,7 +325,7 @@ export async function createApp(opts: AppOptions): Promise<App> {
 
   const saveState = async () => {
     if (!agent.messages.length && !store.exists) return; // an unused session leaves no file behind
-    await store.saveState({ model: agent.model.id, thinking: agent.thinking, thinkingLevel: agent.thinkingLevel, thinkingAuto: agent.thinkingAuto, mode: permissions.mode, total: { ...agent.total } });
+    await store.saveState({ model: agent.model.id, thinking: agent.thinking, thinkingLevel: agent.thinkingLevel, thinkingAuto: agent.thinkingAuto, mode: permissions.mode, total: { ...agent.total }, contextTokens: agent.contextTokens });
   };
 
   const setModel = async (id: string) => {
@@ -344,6 +344,8 @@ export async function createApp(opts: AppOptions): Promise<App> {
     store = next;
     pendingShell.length = 0; // "!cmd" output belongs to the session it was run in
     agent.switchSession(next.sessionId, loaded.messages, loaded.state?.total);
+    // The saved gauge is the last real request size; the estimate would be far off for a long (Korean) history.
+    if (typeof loaded.state?.contextTokens === 'number') agent.contextTokens = loaded.state.contextTokens;
     store.adopt(agent);
     hooks.sessionId = next.sessionId;
     checkpoints.reset(loaded.checkpoints);

@@ -107,6 +107,7 @@ export function Input({
   cursor,
   onChange,
   onSubmit,
+  onImmediate,
   onHistory,
   focus,
   menuOpen,
@@ -123,6 +124,8 @@ export function Input({
   cursor: number;
   onChange: (value: string, cursor: number) => void;
   onSubmit: (v: string) => void;
+  /** ctrl+enter: cut in immediately while the agent works (the app submits what is typed and cancels the running step). */
+  onImmediate?: () => void;
   /** ↑ on the first line / ↓ on the last line: browse earlier prompts. */
   onHistory?: (direction: 'older' | 'newer') => string | undefined;
   focus: boolean;
@@ -233,6 +236,10 @@ export function Input({
       const insert = (text: string) => change(value.slice(0, at) + text + value.slice(at), at + text.length);
       const pos = position(value, at);
       if (key.return) {
+        if (key.ctrl) {
+          if (!menuOpen) onImmediate?.();
+          return;
+        }
         if (key.shift || key.meta) return insert('\n');
         if (value[at - 1] === '\\') return change(value.slice(0, at - 1) + '\n' + value.slice(at), at);
         if (!menuOpen) {

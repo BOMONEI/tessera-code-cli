@@ -89,7 +89,7 @@ export function taskTool(opts: TaskToolOptions) {
       description:
         'Delegate a self-contained task to a subagent with its own context window; you get back its final report. Use "explore" for broad ' +
         'research or searches that need many file reads (read-only), "general" for independent multi-step work. The subagent cannot see ' +
-        'this conversation: the prompt must contain everything it needs. Prefer delegating multi-step work over doing it in this conversation.',
+        'this conversation: the prompt must contain everything it needs. You are the orchestrator: past one or two tool calls, hand the job to a subagent instead of doing it here.',
       inputSchema: z.object({
         description: z.string().describe('3-5 word summary of the task'),
         prompt: z.string().describe('Complete, self-contained instructions for the subagent'),

@@ -42,6 +42,21 @@ describe('image input', () => {
     expect(tokens).toBeLessThan(2_000);
   });
 
+  it('weights CJK text per character instead of four characters per token', () => {
+    const en = estimateTokens([{ role: 'user', content: 'abcdefgh' }]); // ~2 tokens + the per-message overhead
+    const ko = estimateTokens([{ role: 'user', content: '한글여덟글자' }]); // ~6 tokens: one per syllable
+    expect(ko).toBeGreaterThan(en);
+  });
+
+  it('counts tool results by their text, not their JSON wrapping', () => {
+    const t = estimateTokens([
+      { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'read', input: { path: 'a.ts' } }] },
+      { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'c1', toolName: 'read', output: { type: 'text', value: 'x'.repeat(400) } }] },
+    ]);
+    expect(t).toBeGreaterThan(100); // the 400 characters are roughly 100 tokens
+    expect(t).toBeLessThan(400); // and not their escaped JSON size
+  });
+
   it('shows images in replayed prompts', () => {
     expect(promptText({ role: 'user', content: [{ type: 'text', text: 'what is this?\n\n<context>x</context>' }, { type: 'image', image: 'AA', mediaType: 'image/png' }] })).toBe(
       'what is this? [Image]',

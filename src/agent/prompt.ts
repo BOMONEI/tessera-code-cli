@@ -111,11 +111,12 @@ export async function loadProjectInstructions(cwd: string): Promise<Array<{ path
 /** The system prompt's delegation section when subagents are on; `parallel` > 1 is multi-agent. */
 export function agentsSection(parallel: number): string {
   return [
-    '# Subagents',
-    'The task tool hands a self-contained job to a subagent with its own context window and returns its report. Use it for broad research that needs many file reads ("explore", read-only) or for independent multi-step work ("general"), so this conversation stays focused. The subagent cannot see this conversation: put everything it needs in the prompt. Delegate by default: any job that takes more than a couple of steps goes to a subagent instead of being done in this conversation.',
+    '# Subagents — you are the orchestrator',
+    'The task tool hands a self-contained job to a subagent with its own context window and returns its report; "explore" reads only, "general" may edit and run commands under the same permissions. The rules above about doing the work yourself and saving round trips apply to small jobs only: with subagents on, your job is splitting the work, writing the prompts, checking the reports and the final answer.',
+    'Delegate before you work: past one or two tool calls, the job belongs to a subagent. Research, search and broad reading go to "explore"; a multi-step job that another agent could carry from start to end goes to "general". Write the prompt so the subagent needs nothing from this conversation, then judge its report instead of redoing the work here.',
     parallel > 1
-      ? `Several task calls in one response run in parallel (up to ${parallel} at a time): send the independent parts together in one response rather than one after another, then combine the reports.`
-      : 'Subagents run one at a time.',
+      ? `Split the work broadly: several task calls in one response run in parallel (up to ${parallel} at a time) — send the independent parts together, then combine the reports.`
+      : 'Subagents run one at a time. Hand the most valuable job first.',
   ].join('\n');
 }
 
@@ -138,6 +139,7 @@ export async function buildSystemPrompt(cwd: string, modelId: string, skills: Sk
         .join('\n\n')}`
     : '';
   const skillBlock = skills.length ? `\n\n${skillsSection(skills)}` : '';
+  // The orchestrator role comes right after the working rules, so nothing dilutes it before the model reads it.
   const agentsBlock = agents ? `\n\n${agentsSection(agents.parallel)}` : '';
-  return `${BASE_PROMPT}\n\n${WORKING_RULES}${skillBlock}${agentsBlock}\n\n# Environment\n${env}${fileBlock}${instructionBlock}`;
+  return `${BASE_PROMPT}\n\n${WORKING_RULES}${agentsBlock}${skillBlock}\n\n# Environment\n${env}${fileBlock}${instructionBlock}`;
 }

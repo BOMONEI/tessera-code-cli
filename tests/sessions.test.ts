@@ -40,6 +40,18 @@ describe('session store', () => {
     expect(s.messages).toHaveLength(2);
   });
 
+  it('saves and restores the last real context size; older sessions have none', async () => {
+    const { store } = project();
+    await store.saveState({ model: 'm', thinking: true, mode: 'default', total: { inputTokens: 1, outputTokens: 2, cacheReadTokens: 0, cost: 0 }, contextTokens: 92_600 });
+    const loaded = await new SessionStore(store.cwd, store.sessionId).load();
+    expect(loaded.state?.contextTokens).toBe(92_600);
+    const raw = [
+      { type: 'meta', sessionId: 's', cwd: '/p', createdAt: 'x' },
+      { type: 'state', model: 'm', thinking: false, mode: 'plan', total: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cost: 0 } },
+    ].map((r) => JSON.stringify(r)).join('\n');
+    expect(parseSession(raw).state?.contextTokens).toBeUndefined();
+  });
+
   it('creates the file lazily and lists sessions with title and message count', async () => {
     const { cwd, store } = project();
     expect(existsSync(store.path)).toBe(false);
