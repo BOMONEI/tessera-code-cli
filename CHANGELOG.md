@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.7 — 2026-11-20
+
+### Changed
+- The footer is three lines: path, model, and the usage gauges on their own last line (context, then the Go spend
+  windows 5h/week/month). This also fixes the missing gap between the context and 5-hour gauges, and narrow terminals
+  no longer fold the footer.
+
 ## 0.7.6 — 2026-11-20
 
 ### Added

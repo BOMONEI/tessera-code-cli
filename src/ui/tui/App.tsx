@@ -976,11 +976,10 @@ export function TuiApp({
   }
   // Gauges only: the session's own spend is in /cost; the details of both are in /context and /cost.
   const ctxLimit = `(${formatTokens(agent.contextLimit)})`;
-  const meterWidth = usageBarWidth('ctx', ctxPct, ctxLimit) + bars.reduce((w, b) => w + 2 + usageBarWidth(b.label, b.percent), 0);
   const shellMode = input.startsWith('!');
-  const hudSplit = size.columns < meterWidth + 30;
   const subagentRows = busy && !pending ? Math.min(subagents.length, MAX_SUBAGENT_ROWS + 1) : 0;
-  const liveRows = size.rows - 9 - (hudSplit ? 1 : 0) - inputRows - queuedRows - pickerRows - subagentRows - (menu ? menuShown.length + 1 : 0);
+  // The footer is three lines: path, model and the usage gauges.
+  const liveRows = size.rows - 10 - inputRows - queuedRows - pickerRows - subagentRows - (menu ? menuShown.length + 1 : 0);
   const live = streaming ? streamTail(streaming, size.columns - 1, liveRows - 1) : undefined;
   // A short rolling window: enough to see it working without pushing the input box around.
   const thinkingTail = thinkingLive && !streaming && core.config.showThinking ? streamTail(thinkingLive, size.columns - 3, Math.min(6, Math.max(1, liveRows - 2))) : undefined;
@@ -1256,10 +1255,9 @@ export function TuiApp({
             </Text>
           </Box>
         ) : null}
-        {/* Path and usage share a line when there is room; narrow terminals get one line each. */}
-        <Box justifyContent="space-between" paddingX={1} flexDirection={hudSplit ? 'column' : 'row'}>
+        <Box paddingX={1}>
           <Text wrap="truncate">
-            <Text color="blue">{middleEllipsis(where, Math.max(12, size.columns - 4 - (hudSplit ? 0 : meterWidth + 1) - (branch ? stringWidth(branch) + 4 : 0) - (flash ? stringWidth(flash.text) + 2 : 0)))}</Text>
+            <Text color="blue">{middleEllipsis(where, Math.max(12, size.columns - 4 - (branch ? stringWidth(branch) + 4 : 0) - (flash ? stringWidth(flash.text) + 2 : 0)))}</Text>
             {branch ? <Text color="green">{'  ⎇ '}{branch}</Text> : null}
             {flash ? (
               <Text color={flash.ok ? 'greenBright' : 'red'} bold>
@@ -1267,15 +1265,6 @@ export function TuiApp({
                 {flash.text}
               </Text>
             ) : null}
-          </Text>
-          <Text wrap="truncate">
-            <UsageBar label="ctx" percent={ctxPct} suffix={ctxLimit} />
-            {bars.map((b, i) => (
-              <Fragment key={b.label}>
-                {i > 0 ? '  ' : ''}
-                <UsageBar label={b.label} percent={b.percent} />
-              </Fragment>
-            ))}
           </Text>
         </Box>
         <Box paddingX={1}>
@@ -1305,6 +1294,18 @@ export function TuiApp({
             ) : null}
             {agentsMode !== 'single' ? <Text color="cyan">{` · agents: ${agentsMode === 'multi' ? 'multi' : 'sub'}`}</Text> : null}
             {update ? <Text color="yellow">{` · ↑ ${update} (tessera-code update)`}</Text> : null}
+          </Text>
+        </Box>
+        {/* The usage gauges get their own last line: context, then the Go spend windows. */}
+        <Box paddingX={1}>
+          <Text wrap="truncate">
+            <UsageBar label="ctx" percent={ctxPct} suffix={ctxLimit} />
+            {bars.map((b) => (
+              <Fragment key={b.label}>
+                {'  '}
+                <UsageBar label={b.label} percent={b.percent} />
+              </Fragment>
+            ))}
           </Text>
         </Box>
       </Box>
