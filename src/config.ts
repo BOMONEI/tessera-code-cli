@@ -32,6 +32,8 @@ export interface Config {
   thinking: boolean;
   /** How hard to think when thinking is on. Sent explicitly: the model's own default was measured slower. */
   thinkingLevel: ThinkingLevel;
+  /** With thinking on, skip it for prompts that do not need it (short questions, confirmations). /think auto. */
+  thinkingAuto: boolean;
   /** Show the model's thinking in the TUI (streamed live, then folded into one line). Toggle with /think show|hide. */
   showThinking: boolean;
   /**
@@ -89,6 +91,7 @@ const DEFAULTS: Config = {
   hooks: {},
   thinking: true,
   thinkingLevel: 'medium',
+  thinkingAuto: false,
   showThinking: true,
   fullscreen: true,
   permissionMode: 'default',
@@ -204,6 +207,7 @@ export async function loadConfig(cwd: string, opts: { trusted: boolean }): Promi
     if (typeof merged[k] !== 'boolean') throw new Error(`Invalid "${k}" in config: use true or false (got ${JSON.stringify(merged[k])}).`);
   }
   if (typeof merged.showThinking !== 'boolean') throw new Error(`Invalid "showThinking" in config: use true or false (got ${JSON.stringify(merged.showThinking)}).`);
+  if (typeof merged.thinkingAuto !== 'boolean') throw new Error(`Invalid "thinkingAuto" in config: use true or false (got ${JSON.stringify(merged.thinkingAuto)}).`);
   if (typeof merged.thinking !== 'boolean') throw new Error(`Invalid "thinking" in config: use true or false (got ${JSON.stringify(merged.thinking)}).`);
   if (!THINKING_LEVELS.includes(merged.thinkingLevel)) {
     throw new Error(`Invalid "thinkingLevel" in config: use one of ${THINKING_LEVELS.join(', ')} (got ${JSON.stringify(merged.thinkingLevel)}).`);

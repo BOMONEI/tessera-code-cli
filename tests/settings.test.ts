@@ -38,10 +38,10 @@ const { loadConfig, parsePermissionMode, ensureGlobalDefaults, GLOBAL_CONFIG, GL
 
 const model: ModelInfo = { id: 'mock', name: 'mock', format: 'chat', context: 100_000, output: 1000, reasoning: true, cost: { input: 0, output: 0, cacheRead: 0 } };
 
-async function reasoningSent(opts: { thinking: boolean; thinkingLevel?: 'low' | 'medium' | 'high' }) {
+async function reasoningSent(opts: { thinking: boolean; thinkingLevel?: 'low' | 'medium' | 'high'; thinkingAuto?: boolean }, prompt = 'hi') {
   calls.length = 0;
   const a = new Agent({ model, apiKey: 'k', sessionId: 's', system: '', tools: {}, maxSteps: 1, contextLimit: 50_000, ...opts });
-  for await (const _ of a.run('hi')) void _;
+  for await (const _ of a.run(prompt)) void _;
   return calls[0]?.reasoning;
 }
 
@@ -50,6 +50,39 @@ describe('thinking level', () => {
     expect(await reasoningSent({ thinking: true })).toBe('medium');
     expect(await reasoningSent({ thinking: true, thinkingLevel: 'high' })).toBe('high');
     expect(await reasoningSent({ thinking: false, thinkingLevel: 'high' })).toBe('none');
+  });
+
+  it('auto skips thinking for prompts that do not need it', async () => {
+    expect(await reasoningSent({ thinking: true, thinkingAuto: true }, 'what does this repo do?')).toBe('none');
+    expect(await reasoningSent({ thinking: true, thinkingAuto: true, thinkingLevel: 'high' }, '로그인 버그 원인 찾아서 고쳐줘')).toBe('high');
+    expect(await reasoningSent({ thinking: false, thinkingAuto: true }, 'refactor the parser')).toBe('none');
+    expect(await reasoningSent({ thinking: true }, 'thanks')).toBe('medium'); // auto off: always thinks
+  });
+});
+
+describe('needsThinking', () => {
+  it('skips short plain requests and keeps it for real work', async () => {
+    const { needsThinking } = await import('../src/agent/effort.js');
+    for (const p of ['thanks!', 'yes', '커밋해줘', 'what is the default port?', '이 프로젝트 빌드 명령어가 뭐야?', 'ㅇㅋ']) {
+      expect(needsThinking(p), p).toBe(false);
+    }
+    for (const p of [
+      'why does the build fail on CI?',
+      'implement retry with backoff in fetch',
+      '이 함수 리팩터링해줘',
+      '로그인이 안 돼',
+      'look at this:\n```ts\nconst a = 1\n```',
+      'TypeError: x is not a function\n    at foo (src/a.ts:3:1)',
+      'a'.repeat(400),
+      'one\ntwo\nthree\nfour',
+    ]) {
+      expect(needsThinking(p), p).toBe(true);
+    }
+    expect(needsThinking('read this', { images: true })).toBe(true);
+    // "Go on" inherits the previous turn's decision.
+    expect(needsThinking('계속해', { previous: false })).toBe(false);
+    expect(needsThinking('continue', { previous: true })).toBe(true);
+    expect(needsThinking('continue')).toBe(true);
   });
 });
 

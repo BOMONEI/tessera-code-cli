@@ -183,6 +183,38 @@ program
   });
 
 program
+  .command('serve')
+  .description('keep running in the background and let a paired browser drive sessions (remote control; 127.0.0.1 only)')
+  .option('--port <port>', 'port to listen on (default: "remote.port" in config.json, else 8723)', (v) => Number(v))
+  .option('--forget-devices', 'unpair every paired browser before starting')
+  .action(async (opts: { port?: number; forgetDevices?: boolean }) => {
+    if (opts.port !== undefined && !(Number.isInteger(opts.port) && opts.port >= 0 && opts.port <= 65535)) throw new Error('--port must be a port number');
+    const { serve } = await import('./remote/daemon.js');
+    await serve({ port: opts.port, forgetDevices: opts.forgetDevices, log: (line) => stderr.write(`${line}\n`) });
+    process.exit(); // MCP servers and pooled connections of closed sessions must not keep the process alive
+  });
+
+program
+  .command('relay')
+  .description('run the remote-control relay on a server (forwards end-to-end encrypted traffic; token in TESSERA_RELAY_TOKEN)')
+  .option('--port <port>', 'port to listen on', (v) => Number(v), 8080)
+  .option('--host <host>', 'address to listen on (keep 127.0.0.1 behind a TLS proxy such as Caddy)', '127.0.0.1')
+  .action(async (opts: { port: number; host: string }) => {
+    if (!(Number.isInteger(opts.port) && opts.port >= 0 && opts.port <= 65535)) throw new Error('--port must be a port number');
+    const token = process.env.TESSERA_RELAY_TOKEN ?? '';
+    if (!token) throw new Error('Set TESSERA_RELAY_TOKEN (e.g. `openssl rand -base64 32`); the same value goes into "remote.relay.token" on your computer.');
+    const { startRelay } = await import('./remote/relay.js');
+    const log = (line: string) => stderr.write(`${new Date().toISOString()} ${line}\n`);
+    const relay = await startRelay({ port: opts.port, host: opts.host, token, log });
+    log(`tessera-code relay listening on ${opts.host}:${relay.port}`);
+    await new Promise<void>((resolve) => {
+      process.once('SIGINT', resolve);
+      process.once('SIGTERM', resolve);
+    });
+    await relay.close();
+  });
+
+program
   .command('sessions')
   .description('list sessions for the current directory')
   .action(async () => {

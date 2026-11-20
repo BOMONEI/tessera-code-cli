@@ -55,7 +55,7 @@ export class Repl {
       `${bold('tessera-code')} ${dim(`v${VERSION}`)}`,
       dim('Fast, precise coding agent'),
       '',
-      `${dim('model ')} ${agent.model.id}${agent.model.reasoning ? dim(` · thinking ${agent.thinking ? 'on' : 'off'}`) : ''}`,
+      `${dim('model ')} ${agent.model.id}${agent.model.reasoning ? dim(` · thinking ${agent.thinking ? (agent.thinkingAuto ? 'auto' : 'on') : 'off'}`) : ''}`,
       `${dim('cwd   ')} ${this.app.ctx.cwd}`,
     ];
     const icon = stdout.isTTY && (stdout.columns ?? 80) >= 64 ? iconAnsi() : [];

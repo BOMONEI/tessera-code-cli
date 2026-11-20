@@ -246,6 +246,7 @@ export async function createApp(opts: AppOptions): Promise<App> {
     maxSteps: config.maxSteps,
     thinking: opts.thinking ?? config.thinking,
     thinkingLevel: config.thinkingLevel,
+    thinkingAuto: config.thinkingAuto,
     fallback: { models: fallbackModels, firstTokenTimeoutMs: config.fallback.firstTokenTimeoutMs, stickyMs: config.fallback.stickyMs },
     contextLimit: config.contextLimit,
     earlyTools: !hooks.configured,
@@ -318,7 +319,7 @@ export async function createApp(opts: AppOptions): Promise<App> {
 
   const saveState = async () => {
     if (!agent.messages.length && !store.exists) return; // an unused session leaves no file behind
-    await store.saveState({ model: agent.model.id, thinking: agent.thinking, thinkingLevel: agent.thinkingLevel, mode: permissions.mode, total: { ...agent.total } });
+    await store.saveState({ model: agent.model.id, thinking: agent.thinking, thinkingLevel: agent.thinkingLevel, thinkingAuto: agent.thinkingAuto, mode: permissions.mode, total: { ...agent.total } });
   };
 
   const setModel = async (id: string) => {
@@ -348,6 +349,7 @@ export async function createApp(opts: AppOptions): Promise<App> {
       if (!keep.thinking) {
         agent.thinking = st.thinking;
         if (THINKING_LEVELS.includes(st.thinkingLevel as ThinkingLevel)) agent.thinkingLevel = st.thinkingLevel as ThinkingLevel;
+        if (typeof st.thinkingAuto === 'boolean') agent.thinkingAuto = st.thinkingAuto;
       }
       // The configured mode applies to every run; a session only brings back plan mode (read-only, so restoring it
       // never grants more than the user chose). acceptEdits/bypass come from the config or are chosen each run.

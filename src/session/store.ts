@@ -12,6 +12,8 @@ export interface SessionState {
   thinking: boolean;
   /** Absent in sessions saved before thinking levels existed. */
   thinkingLevel?: string;
+  /** Absent in sessions saved before thinking auto existed. */
+  thinkingAuto?: boolean;
   mode: string;
   total: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cost: number };
 }

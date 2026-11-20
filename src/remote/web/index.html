@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>tessera-code</title>
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header>
+    <div class="row">
+      <select id="session" aria-label="Session"></select>
+      <button id="open" title="Open a session" aria-label="Open a session">＋</button>
+      <button id="close-session" class="quiet" title="Close this session" aria-label="Close this session">✕</button>
+    </div>
+    <div id="meta"></div>
+  </header>
+  <main id="log" aria-live="polite"></main>
+  <section class="unpaired-message">
+    <h1>Not paired</h1>
+    <p id="unpaired-detail"></p>
+    <p><button id="forget" class="danger" hidden>Forget this pairing</button></p>
+    <p>Run <code>tessera-code serve</code> on the computer, then open the pairing link it prints there, or scan its QR code with your phone (press <code>p</code> there for a new one).</p>
+  </section>
+  <footer>
+    <div id="notice" class="notice" hidden></div>
+    <div id="queued" hidden></div>
+    <div id="status" hidden></div>
+    <div class="composer">
+      <textarea id="input" rows="1" placeholder="Ask anything · ! shell · / commands" enterkeyhint="send"></textarea>
+      <button id="stop" class="danger" hidden>Stop</button>
+      <button id="send" class="primary">Send</button>
+    </div>
+  </footer>
+  <dialog id="open-dialog">
+    <h2>Open a session</h2>
+    <label for="cwd">Directory</label>
+    <input id="cwd" list="roots" autocomplete="off" spellcheck="false">
+    <datalist id="roots"></datalist>
+    <div class="actions">
+      <button id="new-session" class="primary">New session</button>
+      <button id="dialog-cancel" class="quiet">Cancel</button>
+    </div>
+    <h3>Resume</h3>
+    <div id="stored"></div>
+  </dialog>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

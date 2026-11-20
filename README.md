@@ -92,7 +92,7 @@ TUI keys:
 | `ctrl+v` | attach the clipboard image (screenshots); dragging image files into the terminal attaches them too |
 | typing while the agent works | the message is delivered after the current step and steers the running turn (`↳`); if the turn was already answering, it runs next. `/` and `!` lines wait for the turn |
 | `!command` | run a shell command directly; its output goes to the model with your next message (earlier `!` commands are suggested) |
-| `ctrl+t` / `shift+tab` | toggle thinking / cycle permission mode |
+| `ctrl+t` / `shift+tab` | cycle thinking on → auto → off / cycle permission mode |
 | `esc` | interrupt |
 | `ctrl+c` | copy the selected prompt text; otherwise clear the prompt; on an empty prompt interrupt (running) or exit (idle) |
 | `shift+←/→/↑/↓`, `shift+home/end` | select text in the prompt (typing or backspace replaces it) |
@@ -240,6 +240,51 @@ The choice is saved and applies at once; the bottom bar shows `agents: sub` / `a
 what a subagent is doing. Subagents cost extra requests (their spend counts toward the session and the 5h budget), so
 they pay off for broad research and independent work, not small edits.
 
+## Remote control (preview)
+
+Design, protocol and security model: [docs/remote-control.md](docs/remote-control.md).
+
+`tessera-code serve` keeps running without a terminal UI and lets a paired browser drive sessions: start or resume a
+session, follow the answer as it streams, send prompts (`!shell` and most `/commands` too), steer or stop a running
+turn, and answer permission prompts.
+
+```sh
+cd ~/work && tessera-code serve        # prints a one-time pairing link; p = new link, q = quit
+```
+
+Open the printed link (valid 10 minutes, pairs one browser). The browser keeps a token from then on (in the page's
+own storage, not a cookie, which other local servers could read); `tessera-code serve --forget-devices` unpairs them
+all. A paired browser can do anything you can in a terminal there, `!` shell lines included: pair only your own
+devices. Settings in `~/.tessera-code/config.json` (never from a project):
+
+```json
+{ "remote": { "port": 8723, "roots": ["~/work"] } }
+```
+
+`roots` are the directories (with everything under them) where sessions may be opened; without it, the directory
+`serve` was started in (a warning is printed when that is your whole home directory). `serve` itself listens on
+`127.0.0.1` only.
+
+From a phone, anywhere: run `tessera-code relay` on a server of yours (a small VPS behind Caddy for HTTPS; setup in
+[docs/remote-control.md](docs/remote-control.md#27-deploying-the-relay-on-a-vps)) and add it on the computer:
+
+```json
+{ "remote": { "roots": ["~/work"], "relay": { "url": "https://relay.example.com", "token": "…" } } }
+```
+
+`serve` then connects out to the relay (no open ports on the computer) and prints a QR code: scan it to pair the
+phone. Everything between the phone and the computer is end-to-end encrypted (ECDH P-256, AES-256-GCM): the relay
+forwards ciphertext and cannot read or alter it. The phone keeps its key in the browser, unextractable.
+
+Safeguards: the server answers only requests for its own host name, from its own page, with a paired device's
+token; the page cannot load anything from elsewhere (model output is shown with HTML escaped). Remote changes stay in
+the session and never alter this computer's setup: a session never runs in `dangerous` mode (it falls back to
+`bypass`), `/mode` switches only that session and only to `default`, `acceptEdits` or `plan`, permission answers are
+remembered for the session at most (no "always" rules), and `/auth`, `/prompt`, `/providers`, `/permissions`,
+`/agents`, `/copy`, `/command`, `/exit`, `/skill new|install|remove` and `/mcp reload` are refused. Project hooks and
+MCP servers run only if the project was trusted at the computer before. At most 8 sessions are open at once. On macOS
+the computer is kept awake while `serve` runs.
+
 ## Configuration
 
 The first run creates `~/.tessera-code/config.json` with the main defaults and an empty API key (an existing file is
@@ -263,6 +308,7 @@ never overwritten; one without `"apiKey"` gets the entry added):
 |---|---|---|
 | `model` | a ZDR model id (`tessera-code models`) | startup model |
 | `thinking` | `true` / `false` | reasoning on/off (`ctrl+t`, `/think on\|off`) |
+| `thinkingAuto` | `true` / `false` | with thinking on, skip it for prompts that do not need it (`/think auto`; default `false`) |
 | `thinkingLevel` | `low` / `medium` / `high` | effort when thinking is on (`/think low\|medium\|high`) |
 | `showThinking` | `true` / `false` | show the thinking text live, then folded (`/think show\|hide`; `ctrl+o` always shows it) |
 | `fullscreen` | `true` (default) / `false` | full-screen TUI: click to expand one item, wheel to scroll, drag to copy. `false` prints the conversation into the terminal's scrollback instead (the terminal's own scrolling and selection; `ctrl+o` only) |
@@ -368,6 +414,7 @@ src/
   session/          JSONL session store (~/.tessera-code/sessions)
   cost/             local spend ledger vs Go 5h/week/month caps
   ui/               Ink TUI, readline REPL, formatting
+  remote/           `serve`: session controller, HTTP/SSE server, pairing, web app (web/)
 ```
 
 `npm run poc` runs the Phase 1 provider check across all three API formats.
@@ -384,6 +431,13 @@ Keep it on by default; turn it off for trivial edits. The level (`thinkingLevel`
 explicitly: with the provider default, mimo-v2.6-flash started answering later (median 8.2s vs 5.2s at `medium` over
 7 identical requests). While the model thinks, the TUI streams its reasoning dimly; afterwards it folds into one
 line (`ctrl+o` shows it in full).
+
+**Auto** (`/think auto`, `ctrl+t`, or `"thinkingAuto": true`) decides per turn from the prompt, with no extra model
+call: short plain requests (a question, a confirmation, "commit this") are sent with `reasoning: 'none'`; prompts that
+mention debugging, building, fixing or reviewing, or that are long, contain code or a stack trace, or attach images,
+think at `thinkingLevel`. "continue" keeps the previous turn's choice. When unsure it thinks. The status line shows
+the choice for the running turn (`auto: medium` / `auto: fast`). On Anthropic models switching thinking on or off
+between turns invalidates the cached conversation (not the system prompt and tools), so that turn's input costs more.
 
 ## Fallback
 

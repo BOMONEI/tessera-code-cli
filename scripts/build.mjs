@@ -2,7 +2,7 @@
 // unbundled output: ink alone pulls ~430 tiny es-toolkit modules, and resolving thousands of files dominates
 // startup. React runs in its production build. Lazy imports (TUI, markdown, MCP, undici) stay separate chunks.
 import { build } from 'esbuild';
-import { rmSync } from 'node:fs';
+import { cpSync, rmSync } from 'node:fs';
 
 rmSync('dist/bundle', { recursive: true, force: true });
 await build({
@@ -21,3 +21,16 @@ await build({
   banner: { js: "import { createRequire as __tesseraRequire } from 'node:module'; const require = __tesseraRequire(import.meta.url);" },
   logLevel: 'warning',
 });
+
+// The remote control web app (`tessera-code serve`), served from dist/bundle/web next to the chunk that serves it.
+await build({
+  entryPoints: { app: 'src/remote/web/client.ts' },
+  outdir: 'dist/bundle/web',
+  bundle: true,
+  format: 'esm',
+  platform: 'browser',
+  target: ['es2022', 'safari16'],
+  minify: true,
+  logLevel: 'warning',
+});
+for (const f of ['index.html', 'app.css', 'icon.svg']) cpSync(`src/remote/web/${f}`, `dist/bundle/web/${f}`);

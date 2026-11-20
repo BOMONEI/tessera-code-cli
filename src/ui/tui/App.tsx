@@ -18,7 +18,7 @@ import { appendInputHistory, loadInputHistory, searchHistory } from '../history.
 import { transcriptOf } from '../transcript.js';
 import { imagesFromPaths, readClipboardImage } from '../images.js';
 import { copyToClipboard } from '../clipboard.js';
-import type { ImageInput } from '../../agent/agent.js';
+import type { Agent, ImageInput } from '../../agent/agent.js';
 import type { CompactProgress } from '../../agent/compact.js';
 import { modelIsZdr } from '../../providers/catalog.js';
 import type { SubagentProgress } from '../../tools/task.js';
@@ -70,6 +70,11 @@ export const usageBarWidth = (label: string, percent: number, suffix?: string) =
   stringWidth(`${label} ▕${'░'.repeat(BAR_CELLS)}▏ ${Math.max(0, Math.min(100, Math.round(percent)))}%${suffix ? ` ${suffix}` : ''}`);
 
 /** Live timer next to the spinner: whole seconds, then minutes. */
+/** Thinking as ctrl+t cycles it. */
+export function thinkingMode(agent: Pick<Agent, 'thinking' | 'thinkingAuto'>): 'on' | 'auto' | 'off' {
+  return !agent.thinking ? 'off' : agent.thinkingAuto ? 'auto' : 'on';
+}
+
 function elapsedLabel(ms: number): string {
   const s = Math.floor(ms / 1000);
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
@@ -326,7 +331,7 @@ export function TuiApp({
   // Set once this view handed over to a remounted one; it must not run anything else.
   const supersededRef = useRef(false);
   const [search, setSearch] = useState<{ query: string; index: number } | undefined>();
-  const [thinking, setThinking] = useState(agent.thinking);
+  const [thinking, setThinking] = useState(thinkingMode(agent));
   const [mode, setMode] = useState<PermissionMode>(core.permissions.mode);
   const [spend, setSpend] = useState<SpendWindows | undefined>();
   const [mcp, setMcp] = useState(() => mcpCounts(core.mcpStatus));
@@ -691,7 +696,7 @@ export function TuiApp({
   const applyResult = useCallback(
     async (r: CommandResult): Promise<void> => {
       setMode(core.permissions.mode);
-      setThinking(agent.thinking);
+      setThinking(thinkingMode(agent));
       setAgentsModeState(core.agentsMode());
       setMcp(mcpCounts(core.mcpStatus)); // /mcp reload changes the servers
       forceRender((n) => n + 1);
@@ -893,8 +898,11 @@ export function TuiApp({
     }
     if (mouse && (key.pageUp || key.pageDown)) return scrollBy((key.pageUp ? -1 : 1) * Math.max(1, viewH - 2));
     if (key.ctrl && ch === 't') {
-      agent.thinking = !agent.thinking;
-      setThinking(agent.thinking);
+      // on → auto → off → on
+      if (!agent.thinking) [agent.thinking, agent.thinkingAuto] = [true, false];
+      else if (!agent.thinkingAuto) agent.thinkingAuto = true;
+      else agent.thinking = false;
+      setThinking(thinkingMode(agent));
       void core.saveState().catch(() => {});
       return;
     }
@@ -1253,7 +1261,9 @@ export function TuiApp({
             {agent.model.reasoning ? (
               <>
                 {' · '}
-                <Text color={thinking ? 'magenta' : undefined}>{thinking ? agent.thinkingLevel : 'thinking off'}</Text>
+                <Text color={thinking === 'off' ? undefined : 'magenta'}>
+                  {thinking === 'off' ? 'thinking off' : thinking === 'on' ? agent.thinkingLevel : busy && agent.turnThinking !== undefined ? `auto: ${agent.turnThinking ? agent.thinkingLevel : 'fast'}` : `auto ${agent.thinkingLevel}`}
+                </Text>
               </>
             ) : null}
             {' · '}

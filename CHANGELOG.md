@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.7.0 — 2026-11-20
+
+### Added
+- Remote control (preview): `tessera-code serve` runs sessions headless and serves a web app to drive them from a
+  phone (send prompts, interrupt, answer permission prompts, start sessions in allowed folders). With
+  `"remote": {"relay": …}` it connects out to your own `tessera-code relay` (e.g. on a VPS) and pairs a phone by QR
+  code; everything between phone and computer is end-to-end encrypted, the relay only forwards ciphertext. See
+  `docs/remote-control.md`.
+- Thinking auto: `/think auto` (or `ctrl+t`, which now cycles on → auto → off, or `"thinkingAuto": true`) skips
+  thinking for short plain prompts (questions, confirmations) and keeps it for debugging, building, reviewing, long
+  prompts, code or images. The status line shows each turn's choice (`auto: medium` / `auto: fast`).
+
 ## 0.6.3 — 2026-11-19
 
 ### Fixed

@@ -60,7 +60,7 @@ export interface SlashCommand {
 /** /command: everything the bottom bar no longer spells out. */
 export const KEYS_HELP = [
   'Keys',
-  '  ctrl+t          thinking on/off (/think for the level and showing it)',
+  '  ctrl+t          thinking on → auto → off (/think for the level and showing it)',
   '  shift+tab       permission mode: default → acceptEdits → plan → bypass (/mode for dangerous)',
   '  ctrl+o          expand/collapse all tool output, thinking and diffs',
   '  click           expand/collapse that one item (full screen)',
@@ -472,8 +472,8 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
   },
   {
     name: 'think',
-    description: 'reasoning: on | off | low | medium | high; show | hide its text',
-    argHint: '[on|off|low|medium|high|show|hide]',
+    description: 'reasoning: on | auto | off | low | medium | high; show | hide its text',
+    argHint: '[on|auto|off|low|medium|high|show|hide]',
     async run(app, arg) {
       const { agent } = app;
       if (arg === 'show' || arg === 'hide') {
@@ -481,18 +481,27 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
         return { output: app.config.showThinking ? 'Thinking is shown while the model works (folded afterwards; ctrl+o expands).' : 'Thinking is hidden (only the status line shows it is thinking; ctrl+o still shows it in full).' };
       }
       if (!agent.model.reasoning) return { output: `${agent.model.id} has no reasoning mode.` };
-      if (arg && arg !== 'on' && arg !== 'off' && !THINKING_LEVELS.includes(arg as ThinkingLevel)) return { output: 'Usage: /think [on|off|low|medium|high|show|hide]' };
+      if (arg && arg !== 'on' && arg !== 'off' && arg !== 'auto' && !THINKING_LEVELS.includes(arg as ThinkingLevel)) return { output: 'Usage: /think [on|auto|off|low|medium|high|show|hide]' };
       if (THINKING_LEVELS.includes(arg as ThinkingLevel)) {
         agent.thinkingLevel = arg as ThinkingLevel;
         agent.thinking = true;
+      } else if (arg === 'auto' || arg === 'on') {
+        agent.thinking = true;
+        agent.thinkingAuto = arg === 'auto';
       } else agent.thinking = arg ? arg === 'on' : !agent.thinking;
-      return { output: agent.thinking ? `Thinking on (${agent.thinkingLevel}) — slower, more accurate` : 'Thinking off — faster, best for simple edits' };
+      if (!agent.thinking) return { output: 'Thinking off — faster, best for simple edits' };
+      return {
+        output: agent.thinkingAuto
+          ? `Thinking auto (${agent.thinkingLevel} when needed) — short questions and confirmations go without it`
+          : `Thinking on (${agent.thinkingLevel}) — slower, more accurate`,
+      };
     },
     async suggest(app) {
-      const { thinking: on, thinkingLevel: level } = app.agent;
+      const { thinking: on, thinkingLevel: level, thinkingAuto: auto } = app.agent;
       const hints: Record<ThinkingLevel, string> = { low: 'quick reasoning', medium: 'balanced (default)', high: 'deepest, slowest' };
       return [
-        { value: 'on', hint: `${on ? 'current · ' : ''}reasoning at ${level}` },
+        { value: 'on', hint: `${on && !auto ? 'current · ' : ''}reasoning at ${level}` },
+        { value: 'auto', hint: `${on && auto ? 'current · ' : ''}${level} only when the prompt needs it` },
         { value: 'off', hint: `${on ? '' : 'current · '}faster, best for simple edits` },
         ...THINKING_LEVELS.map((l) => ({ value: l, hint: `${on && l === level ? 'current · ' : ''}${hints[l]}` })),
         { value: 'show', hint: `${app.config.showThinking ? 'current · ' : ''}show thinking text` },
