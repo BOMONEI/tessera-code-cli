@@ -7,7 +7,7 @@ import { recordSpend } from '../cost/ledger.js';
 import { OPENCODE_GO, splitModelId } from '../providers/registry.js';
 import { summarize, compactedHistory, type CompactProgress } from './compact.js';
 import type { ThinkingLevel } from '../config.js';
-import { needsThinking } from './effort.js';
+import { autoLevel, type AutoLevel } from './effort.js';
 
 export type AgentEvent =
   | { type: 'text'; text: string }
@@ -175,10 +175,10 @@ export class Agent {
   thinking: boolean;
   /** Reasoning effort when thinking is on; applies from the next LLM call. */
   thinkingLevel: ThinkingLevel;
-  /** With thinking on: decide per turn from the prompt (effort.ts); applies from the next turn. */
+  /** With thinking on: pick the level per turn from the prompt, `thinkingLevel` at most (effort.ts). */
   thinkingAuto: boolean;
-  /** Whether the running (or last) turn reasons: in auto, what was decided for it. */
-  turnThinking?: boolean;
+  /** The running (or last) turn's reasoning level: in auto, what was picked for it. */
+  turnLevel?: AutoLevel;
   private fallbackState: FallbackState = { start: 0, until: 0 };
   /** Progress of a running compaction (manual, before a turn or between steps), for the UI. */
   onCompactProgress?: (p: CompactProgress) => void;
@@ -357,9 +357,12 @@ export class Agent {
         yield { type: 'error', message: `Auto-compaction failed: ${errorMessage(e)}` };
       }
     }
-    // Decided on the prompt as typed (before hook context); a resent history (string-less turn) keeps thinking on.
-    this.turnThinking =
-      this.thinking && (!this.thinkingAuto || typeof input !== 'string' || needsThinking(input, { images: images.length > 0, previous: this.turnThinking }));
+    // Picked on the prompt as typed (before hook context); a resent history (no prompt) thinks at the level.
+    this.turnLevel = !this.thinking
+      ? 'none'
+      : this.thinkingAuto && typeof input === 'string'
+        ? autoLevel(input, this.thinkingLevel, { images: images.length > 0, previous: this.turnLevel })
+        : this.thinkingLevel;
     if (typeof input === 'string' && this.opts.beforeTurn) {
       const r = await this.opts.beforeTurn(input);
       if (r.blocked) {
@@ -407,7 +410,7 @@ export class Agent {
       maxOutputTokens: Math.min(this.model.output, MAX_OUTPUT_TOKENS),
       // Mapped to reasoning_effort / thinking budgets per provider; non-reasoning models get no parameter. The level is
       // always explicit: leaving it to the provider default answered noticeably later on OpenCode Go.
-      reasoning: this.model.reasoning ? (this.turnThinking ? this.thinkingLevel : 'none') : undefined,
+      reasoning: this.model.reasoning ? this.turnLevel : undefined,
       maxRetries: (this.opts.fallback?.models.length ?? 0) > 0 ? 0 : 2, // the fallback chain is the retry policy
       abortSignal: signal,
       onError: () => {}, // surfaced through the 'error' stream part instead

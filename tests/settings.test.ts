@@ -52,37 +52,77 @@ describe('thinking level', () => {
     expect(await reasoningSent({ thinking: false, thinkingLevel: 'high' })).toBe('none');
   });
 
-  it('auto skips thinking for prompts that do not need it', async () => {
-    expect(await reasoningSent({ thinking: true, thinkingAuto: true }, 'what does this repo do?')).toBe('none');
-    expect(await reasoningSent({ thinking: true, thinkingAuto: true, thinkingLevel: 'high' }, '로그인 버그 원인 찾아서 고쳐줘')).toBe('high');
+  it('auto picks the level per prompt, at most the configured one', async () => {
+    const auto = (thinkingLevel: 'low' | 'medium' | 'high', prompt: string) => reasoningSent({ thinking: true, thinkingAuto: true, thinkingLevel }, prompt);
+    expect(await auto('high', 'what does this repo do?')).toBe('none');
+    expect(await auto('high', 'README에 설치 방법 추가해줘')).toBe('low');
+    expect(await auto('high', '로그인 버그 고쳐줘')).toBe('medium');
+    expect(await auto('high', '세션 저장 구조 설계 검토해줘')).toBe('high');
+    // The cap: never above it, unchanged below it.
+    expect(await auto('low', '세션 저장 구조 설계 검토해줘')).toBe('low');
+    expect(await auto('medium', '세션 저장 구조 설계 검토해줘')).toBe('medium');
+    expect(await auto('low', 'thanks')).toBe('none');
     expect(await reasoningSent({ thinking: false, thinkingAuto: true }, 'refactor the parser')).toBe('none');
-    expect(await reasoningSent({ thinking: true }, 'thanks')).toBe('medium'); // auto off: always thinks
+    expect(await reasoningSent({ thinking: true }, 'thanks')).toBe('medium'); // auto off: always the level
   });
 });
 
-describe('needsThinking', () => {
-  it('skips short plain requests and keeps it for real work', async () => {
-    const { needsThinking } = await import('../src/agent/effort.js');
+describe('auto thinking level', () => {
+  it('grades prompts by the work they ask for', async () => {
+    const { promptLevel, autoLevel } = await import('../src/agent/effort.js');
     for (const p of ['thanks!', 'yes', '커밋해줘', 'what is the default port?', '이 프로젝트 빌드 명령어가 뭐야?', 'ㅇㅋ']) {
-      expect(needsThinking(p), p).toBe(false);
+      expect(promptLevel(p), p).toBe('none');
     }
+    for (const p of ['add a --verbose flag', 'rename foo to bar', '버튼 문구 변경해줘']) expect(promptLevel(p), p).toBe('low');
     for (const p of [
       'why does the build fail on CI?',
       'implement retry with backoff in fetch',
-      '이 함수 리팩터링해줘',
       '로그인이 안 돼',
       'look at this:\n```ts\nconst a = 1\n```',
-      'TypeError: x is not a function\n    at foo (src/a.ts:3:1)',
       'a'.repeat(400),
       'one\ntwo\nthree\nfour',
     ]) {
-      expect(needsThinking(p), p).toBe(true);
+      expect(promptLevel(p), p).toBe('medium');
     }
-    expect(needsThinking('read this', { images: true })).toBe(true);
-    // "Go on" inherits the previous turn's decision.
-    expect(needsThinking('계속해', { previous: false })).toBe(false);
-    expect(needsThinking('continue', { previous: true })).toBe(true);
-    expect(needsThinking('continue')).toBe(true);
+    expect(promptLevel('read this', { images: true })).toBe('medium');
+    for (const p of [
+      '이 함수 리팩터링해줘',
+      'find the root cause of the deadlock',
+      '성능 최적화 방안',
+      'TypeError: x is not a function\n    at foo (src/a.ts:3:1)',
+      'a'.repeat(2000),
+    ]) {
+      expect(promptLevel(p), p).toBe('high');
+    }
+    expect(autoLevel('find the race condition', 'medium')).toBe('medium');
+    expect(autoLevel('add a flag', 'medium')).toBe('low');
+    // "Go on" inherits the previous turn's level (capped like any other).
+    expect(promptLevel('계속해', { previous: 'none' })).toBe('none');
+    expect(promptLevel('continue', { previous: 'medium' })).toBe('medium');
+    expect(autoLevel('continue', 'low')).toBe('low');
+  });
+});
+
+describe('/think', () => {
+  it('sets on/auto/off and the level (the cap in auto) together or alone', async () => {
+    const { BUILTIN_COMMANDS } = await import('../src/commands.js');
+    const think = BUILTIN_COMMANDS.find((c) => c.name === 'think')!;
+    const agent = { model, thinking: false, thinkingAuto: false, thinkingLevel: 'medium' };
+    const app = { agent, config: { showThinking: true } } as unknown as Parameters<typeof think.run>[0];
+    const state = () => ({ thinking: agent.thinking, thinkingAuto: agent.thinkingAuto, thinkingLevel: agent.thinkingLevel });
+    expect((await think.run(app, 'auto high')).output).toMatch(/at most high/);
+    expect(state()).toEqual({ thinking: true, thinkingAuto: true, thinkingLevel: 'high' });
+    await think.run(app, 'low'); // a level alone keeps auto: it lowers the cap
+    expect(state()).toEqual({ thinking: true, thinkingAuto: true, thinkingLevel: 'low' });
+    await think.run(app, 'off');
+    expect(state()).toEqual({ thinking: false, thinkingAuto: true, thinkingLevel: 'low' });
+    await think.run(app, 'on medium');
+    expect(state()).toEqual({ thinking: true, thinkingAuto: false, thinkingLevel: 'medium' });
+    await think.run(app, 'auto');
+    expect(state()).toEqual({ thinking: true, thinkingAuto: true, thinkingLevel: 'medium' });
+    expect((await think.run(app, 'auto bogus')).output).toMatch(/^Usage/);
+    expect((await think.run(app, 'off high')).output).toMatch(/^Usage/);
+    expect(state()).toEqual({ thinking: true, thinkingAuto: true, thinkingLevel: 'medium' });
   });
 });
 

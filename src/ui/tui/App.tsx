@@ -1262,7 +1262,7 @@ export function TuiApp({
               <>
                 {' · '}
                 <Text color={thinking === 'off' ? undefined : 'magenta'}>
-                  {thinking === 'off' ? 'thinking off' : thinking === 'on' ? agent.thinkingLevel : busy && agent.turnThinking !== undefined ? `auto: ${agent.turnThinking ? agent.thinkingLevel : 'fast'}` : `auto ${agent.thinkingLevel}`}
+                  {thinking === 'off' ? 'thinking off' : thinking === 'on' ? agent.thinkingLevel : busy && agent.turnLevel ? `auto: ${agent.turnLevel === 'none' ? 'fast' : agent.turnLevel}` : `auto ≤${agent.thinkingLevel}`}
                 </Text>
               </>
             ) : null}

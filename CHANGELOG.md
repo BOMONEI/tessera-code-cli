@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.1 — 2026-11-20
+
+### Changed
+- Thinking auto picks a level per prompt instead of just on/off, and `thinkingLevel` is the most it may use:
+  `/think auto low|medium|high` (or a level alone while in auto) sets that cap. Questions and confirmations get no
+  thinking, small changes `low`, debugging, building and reviewing `medium`, design, performance, security,
+  refactoring and root causes `high`. The status line shows the cap (`auto ≤high`) and each turn's level.
+
 ## 0.7.0 — 2026-11-20
 
 ### Added

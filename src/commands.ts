@@ -472,7 +472,7 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
   },
   {
     name: 'think',
-    description: 'reasoning: on | auto | off | low | medium | high; show | hide its text',
+    description: 'reasoning: on | auto | off | low | medium | high (auto low|medium|high: the most it may think); show | hide its text',
     argHint: '[on|auto|off|low|medium|high|show|hide]',
     async run(app, arg) {
       const { agent } = app;
@@ -481,18 +481,23 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
         return { output: app.config.showThinking ? 'Thinking is shown while the model works (folded afterwards; ctrl+o expands).' : 'Thinking is hidden (only the status line shows it is thinking; ctrl+o still shows it in full).' };
       }
       if (!agent.model.reasoning) return { output: `${agent.model.id} has no reasoning mode.` };
-      if (arg && arg !== 'on' && arg !== 'off' && arg !== 'auto' && !THINKING_LEVELS.includes(arg as ThinkingLevel)) return { output: 'Usage: /think [on|auto|off|low|medium|high|show|hide]' };
-      if (THINKING_LEVELS.includes(arg as ThinkingLevel)) {
-        agent.thinkingLevel = arg as ThinkingLevel;
+      // "auto high", "on low", "low" (keeps on/auto as it is), "on", "auto", "off" or nothing (toggle).
+      const words = arg.toLowerCase().split(/\s+/).filter(Boolean);
+      const switchTo = words.find((w) => w === 'on' || w === 'off' || w === 'auto');
+      const level = words.find((w) => THINKING_LEVELS.includes(w as ThinkingLevel)) as ThinkingLevel | undefined;
+      if (words.length > (switchTo ? 1 : 0) + (level ? 1 : 0) || (switchTo === 'off' && level)) {
+        return { output: 'Usage: /think [on|auto|off] [low|medium|high] · /think show|hide' };
+      }
+      if (level) agent.thinkingLevel = level;
+      if (switchTo === 'off') agent.thinking = false;
+      else if (switchTo || level) {
         agent.thinking = true;
-      } else if (arg === 'auto' || arg === 'on') {
-        agent.thinking = true;
-        agent.thinkingAuto = arg === 'auto';
-      } else agent.thinking = arg ? arg === 'on' : !agent.thinking;
+        if (switchTo) agent.thinkingAuto = switchTo === 'auto';
+      } else agent.thinking = !agent.thinking;
       if (!agent.thinking) return { output: 'Thinking off — faster, best for simple edits' };
       return {
         output: agent.thinkingAuto
-          ? `Thinking auto (${agent.thinkingLevel} when needed) — short questions and confirmations go without it`
+          ? `Thinking auto, at most ${agent.thinkingLevel} — each prompt gets what it needs: none for questions and confirmations, more for real work`
           : `Thinking on (${agent.thinkingLevel}) — slower, more accurate`,
       };
     },
@@ -501,9 +506,9 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
       const hints: Record<ThinkingLevel, string> = { low: 'quick reasoning', medium: 'balanced (default)', high: 'deepest, slowest' };
       return [
         { value: 'on', hint: `${on && !auto ? 'current · ' : ''}reasoning at ${level}` },
-        { value: 'auto', hint: `${on && auto ? 'current · ' : ''}${level} only when the prompt needs it` },
+        ...THINKING_LEVELS.map((l) => ({ value: `auto ${l}`, hint: `${on && auto && l === level ? 'current · ' : ''}per prompt, at most ${l}` })),
         { value: 'off', hint: `${on ? '' : 'current · '}faster, best for simple edits` },
-        ...THINKING_LEVELS.map((l) => ({ value: l, hint: `${on && l === level ? 'current · ' : ''}${hints[l]}` })),
+        ...THINKING_LEVELS.map((l) => ({ value: l, hint: `${on && !auto && l === level ? 'current · ' : ''}${hints[l]}${auto ? ' (auto: the most it may think)' : ''}` })),
         { value: 'show', hint: `${app.config.showThinking ? 'current · ' : ''}show thinking text` },
         { value: 'hide', hint: `${app.config.showThinking ? '' : 'current · '}hide thinking text` },
       ];

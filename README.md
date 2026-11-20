@@ -308,8 +308,8 @@ never overwritten; one without `"apiKey"` gets the entry added):
 |---|---|---|
 | `model` | a ZDR model id (`tessera-code models`) | startup model |
 | `thinking` | `true` / `false` | reasoning on/off (`ctrl+t`, `/think on\|off`) |
-| `thinkingAuto` | `true` / `false` | with thinking on, skip it for prompts that do not need it (`/think auto`; default `false`) |
-| `thinkingLevel` | `low` / `medium` / `high` | effort when thinking is on (`/think low\|medium\|high`) |
+| `thinkingAuto` | `true` / `false` | with thinking on, pick the level per prompt, at most `thinkingLevel` (`/think auto [low\|medium\|high]`; default `false`) |
+| `thinkingLevel` | `low` / `medium` / `high` | effort when thinking is on; the cap in auto (`/think low\|medium\|high`) |
 | `showThinking` | `true` / `false` | show the thinking text live, then folded (`/think show\|hide`; `ctrl+o` always shows it) |
 | `fullscreen` | `true` (default) / `false` | full-screen TUI: click to expand one item, wheel to scroll, drag to copy. `false` prints the conversation into the terminal's scrollback instead (the terminal's own scrolling and selection; `ctrl+o` only) |
 | `permissionMode` | `default` (ask) / `acceptEdits` (alias `edit`) / `plan` (read-only) / `bypass` (ask only for destructive commands and protected paths) / `dangerous` (never ask) | startup mode; `shift+tab` and `/mode` change it here too, so the new mode applies to every project from then on |
@@ -432,12 +432,14 @@ explicitly: with the provider default, mimo-v2.6-flash started answering later (
 7 identical requests). While the model thinks, the TUI streams its reasoning dimly; afterwards it folds into one
 line (`ctrl+o` shows it in full).
 
-**Auto** (`/think auto`, `ctrl+t`, or `"thinkingAuto": true`) decides per turn from the prompt, with no extra model
-call: short plain requests (a question, a confirmation, "commit this") are sent with `reasoning: 'none'`; prompts that
-mention debugging, building, fixing or reviewing, or that are long, contain code or a stack trace, or attach images,
-think at `thinkingLevel`. "continue" keeps the previous turn's choice. When unsure it thinks. The status line shows
-the choice for the running turn (`auto: medium` / `auto: fast`). On Anthropic models switching thinking on or off
-between turns invalidates the cached conversation (not the system prompt and tools), so that turn's input costs more.
+**Auto** (`/think auto [low|medium|high]`, `ctrl+t`, or `"thinkingAuto": true`) picks the level per turn from the
+prompt, with no extra model call, and never above `thinkingLevel` (the cap: `/think auto high` lets hard prompts
+think at `high`, `/think auto low` keeps every turn quick). Short plain requests (a question, a confirmation, "commit
+this") get no thinking; small changes (add, rename, 변경) `low`; debugging, building, reviewing, prompts that are long
+or contain code or images `medium`; design, performance, security, refactoring, root causes and stack traces `high`.
+"continue" keeps the previous turn's level. When unsure it thinks. The status line shows the cap (`auto ≤high`) and,
+during a turn, its level (`auto: medium` / `auto: fast`). On Anthropic models switching thinking on or off between
+turns invalidates the cached conversation (not the system prompt and tools), so that turn's input costs more.
 
 ## Fallback
 
