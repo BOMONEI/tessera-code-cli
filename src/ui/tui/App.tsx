@@ -4,13 +4,14 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Static, Text, useApp, useBoxMetrics, useCursor, useInput, useStdout, type DOMElement } from 'ink';
 import Spinner from 'ink-spinner';
 import type { App as Core } from '../../app.js';
 import type { Decision, PermissionMode, PermissionRequest } from '../../permissions.js';
 import { loadCommands, runCommand, type Choice, type CommandResult } from '../../commands.js';
 import { GO_LIMITS, spendWindows, type SpendWindows } from '../../cost/ledger.js';
+import type { GoUsage } from '../../cost/go.js';
 import { formatClock, formatTiming, formatTokens, formatUsage, gitBranch, hasSecret, maskSecretInput, notify, outputText, redactSecret, tildePath, toolLabel, toolLabelFull } from '../format.js';
 import { streamTail, trimBlock, visualRows } from '../text.js';
 import { loadMarkdown, markdown } from '../lazy-markdown.js';
@@ -177,7 +178,7 @@ function initialItems(core: Core, width: number, notices: string[], whatsNew?: W
   if (whatsNew) {
     items.push({ id: nextId++, kind: 'changelog', version: whatsNew.version, from: whatsNew.from, count: whatsNew.count, markdown: whatsNew.sections.map((s) => s.markdown).join('\n\n') });
   }
-  for (const e of transcriptOf(agent.messages)) {
+  for (const e of transcriptOf(agent.messages, 30, core.summaries())) {
     items.push(e.kind === 'assistant' ? { id: nextId++, kind: 'assistant', markdown: e.text } : { id: nextId++, ...e });
   }
   for (const text of notices) items.push({ id: nextId++, kind: 'info', text });
@@ -334,6 +335,13 @@ export function TuiApp({
   const [thinking, setThinking] = useState(thinkingMode(agent));
   const [mode, setMode] = useState<PermissionMode>(core.permissions.mode);
   const [spend, setSpend] = useState<SpendWindows | undefined>();
+  /** The Go server's own usage when this is a Go model; the gauges prefer it over the local estimate. */
+  const [go, setGo] = useState<GoUsage | undefined>();
+  /** Re-reads the gauges: the local ledger always, plus the Go server's own numbers when this is a Go model. */
+  const refreshSpend = useCallback(() => {
+    void spendWindows().then(setSpend);
+    void core.goUsage().then(setGo);
+  }, [core]);
   const [mcp, setMcp] = useState(() => mcpCounts(core.mcpStatus));
   /** A newer release, when there is one (checked in the background at most once a day). */
   const [update, setUpdate] = useState<string | undefined>();
@@ -484,7 +492,7 @@ export function TuiApp({
     agent.onCompactProgress = (p) => setStatus(p.phase === 'done' ? (turnRef.current ? 'Thinking' : undefined) : compactLabel(p));
     bridge.ask = (req) => new Promise<Decision>((resolve) => setPending({ req, resolve }));
     bridge.onDiff = (path, diff) => pendingDiffs.current.push({ path, diff });
-    void spendWindows().then(setSpend);
+    refreshSpend();
     void gitBranch(core.ctx.cwd).then(setBranch);
     void loadInputHistory(core.ctx.cwd).then((h) => (historyRef.current = h));
     // After the first frame; needed only once answers arrive (raw text until then; full screen redraws them).
@@ -502,6 +510,12 @@ export function TuiApp({
     }
     void core.listSkills().then((skills) => loadCommands(core.ctx.cwd, skills)).then((all) => setCommands(all.map(({ name, description, argHint }) => ({ name, description, argHint }))));
   }, [bridge, core.ctx.cwd]);
+
+  // Spend windows roll with time, so an idle session re-checks them now and then (each turn refreshes them too).
+  useEffect(() => {
+    const timer = setInterval(refreshSpend, 60_000);
+    return () => clearInterval(timer);
+  }, [refreshSpend]);
 
   // Streaming markdown: finished blocks are rendered and printed for good; only the block still being written
   // stays in the live area (re-rendered as it grows, throttled).
@@ -538,6 +552,7 @@ export function TuiApp({
     setBusy(true);
     setStatus(label);
     setBusySince(Date.now());
+    refreshSpend(); // a new turn re-checks the gauges
     const controller = new AbortController();
     abortRef.current = controller;
     return controller;
@@ -668,7 +683,7 @@ export function TuiApp({
         const seconds = (Date.now() - started) / 1000;
         const after = core.config.notifyAfterSeconds;
         if (after > 0 && seconds >= after && !controller.signal.aborted) notify(`tessera-code: ${failed ? 'stopped with an error' : 'done'} (${Math.round(seconds)}s)`);
-        setSpend(await spendWindows());
+        refreshSpend();
         setBranch(await gitBranch(core.ctx.cwd)); // the agent may have switched branches
       }
       return discarded;
@@ -948,10 +963,20 @@ export function TuiApp({
 
   const ctxPct = Math.round((agent.contextTokens / agent.contextLimit) * 100);
   const where = tildePath(core.ctx.cwd);
-  const fiveHourPct = spend ? (spend.fiveHour / GO_LIMITS.fiveHour) * 100 : undefined;
+  // The Go server's own numbers win; the local estimate fills the windows it does not report.
+  const local = spend
+    ? { fiveHour: (spend.fiveHour / GO_LIMITS.fiveHour) * 100, week: (spend.week / GO_LIMITS.week) * 100, month: (spend.month / GO_LIMITS.month) * 100 }
+    : undefined;
+  const pcts = go || local ? { fiveHour: go?.fiveHour ?? local?.fiveHour, week: go?.week ?? local?.week, month: go?.month ?? local?.month } : undefined;
+  const bars: Array<{ label: string; percent: number }> = [];
+  if (pcts) {
+    if (pcts.fiveHour !== undefined) bars.push({ label: '5h', percent: pcts.fiveHour });
+    if (pcts.week !== undefined) bars.push({ label: 'wk', percent: pcts.week });
+    if (pcts.month !== undefined) bars.push({ label: 'mo', percent: pcts.month });
+  }
   // Gauges only: the session's own spend is in /cost; the details of both are in /context and /cost.
   const ctxLimit = `(${formatTokens(agent.contextLimit)})`;
-  const meterWidth = usageBarWidth('ctx', ctxPct, ctxLimit) + (fiveHourPct !== undefined ? 2 + usageBarWidth('5h', fiveHourPct) : 0);
+  const meterWidth = usageBarWidth('ctx', ctxPct, ctxLimit) + bars.reduce((w, b) => w + 2 + usageBarWidth(b.label, b.percent), 0);
   const shellMode = input.startsWith('!');
   const hudSplit = size.columns < meterWidth + 30;
   const subagentRows = busy && !pending ? Math.min(subagents.length, MAX_SUBAGENT_ROWS + 1) : 0;
@@ -1245,12 +1270,12 @@ export function TuiApp({
           </Text>
           <Text wrap="truncate">
             <UsageBar label="ctx" percent={ctxPct} suffix={ctxLimit} />
-            {fiveHourPct !== undefined ? (
-              <>
-                {'  '}
-                <UsageBar label="5h" percent={fiveHourPct} />
-              </>
-            ) : null}
+            {bars.map((b, i) => (
+              <Fragment key={b.label}>
+                {i > 0 ? '  ' : ''}
+                <UsageBar label={b.label} percent={b.percent} />
+              </Fragment>
+            ))}
           </Text>
         </Box>
         <Box paddingX={1}>

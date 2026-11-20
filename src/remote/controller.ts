@@ -272,7 +272,7 @@ export class SessionController {
             break;
           case 'turn-finish':
             if (ev.discarded && userSeq !== undefined) discarded = true;
-            else this.emit({ kind: 'turn-finish', summary: `${formatTiming(ev)} · ${formatUsage(ev.usage)}` });
+            else this.emit({ kind: 'turn-finish', summary: `${formatTiming(ev)} · ${formatUsage(ev.usage)} · ${formatClock()}` });
             break;
           case 'error':
             this.emit({ kind: 'error', text: ev.message });
@@ -321,7 +321,7 @@ export class SessionController {
 
   /** Recorded history of a resumed or replaced conversation. */
   private history(): void {
-    for (const e of transcriptOf(this.app.agent.messages)) {
+    for (const e of transcriptOf(this.app.agent.messages, 30, this.app.summaries())) {
       if (e.kind === 'user') this.emit({ kind: 'user', text: e.text });
       else if (e.kind === 'assistant') this.emit({ kind: 'markdown', text: e.text });
       else if (e.kind === 'tool') this.emit({ kind: 'tool-result', id: '', label: e.label, output: cut(e.output), isError: e.isError ?? false });

@@ -41,6 +41,7 @@ function fakeApp(script: Script): FakeApp {
       return f.script(signal, f);
     },
     shell: async (command: string) => ({ output: `ran ${command}`, code: 0 }),
+    summaries: () => [],
     close: async () => {},
   } as unknown as App;
   return f;

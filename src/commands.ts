@@ -79,6 +79,7 @@ export const KEYS_HELP = [
   '  path ⎇ branch                 working directory and git branch',
   '  ctx ▕███░░░░░░░▏ 38% (500k)   context used of the limit in brackets (/context)',
   '  5h  ▕█░░░░░░░░░▏ 1%           OpenCode Go spend in the 5-hour window, this machine (/cost)',
+  '  wk/mo ▕░░░░░░░░░▏ %          the same spend over the week / month window (/cost)',
   '  model · medium · bypass · mcp 2/3',
   '                                model, thinking level (ctrl+t), permission mode (shift+tab),',
   '                                MCP servers connected/configured (/mcp)',
@@ -437,9 +438,13 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
     description: 'session usage and estimated OpenCode Go spend',
     async run(app) {
       const w = await spendWindows();
+      const go = await app.goUsage();
+      const gp = (v?: number) => (v === undefined ? '—' : `${Math.round(v)}%`);
       return {
         output: [
           `Session: ${formatUsage(app.agent.total)}`,
+          // The server's own numbers (real); absent for other providers or when it cannot be reached.
+          ...(go ? [`Go usage (server): 5h ${gp(go.fiveHour)} · week ${gp(go.week)} · month ${gp(go.month)}`] : []),
           `Go spend (this machine): 5h $${w.fiveHour.toFixed(2)}/${GO_LIMITS.fiveHour} (${pct(w.fiveHour, GO_LIMITS.fiveHour)}) · ` +
             `week $${w.week.toFixed(2)}/${GO_LIMITS.week} · month $${w.month.toFixed(2)}/${GO_LIMITS.month}`,
         ].join('\n'),

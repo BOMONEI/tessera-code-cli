@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.7.6 — 2026-11-20
+
+### Added
+- The bottom bar shows week and month gauges next to the 5-hour one, and every turn (plus once a minute while idle)
+  re-checks them. On Go models the gauges show the server's own usage percentages (`/zen/go/v1/usage`), with this
+  machine's estimate filling in elsewhere; `/cost` labels the two sources apart.
+- A finished turn's timing line (`⏱ … · … · 2026.11.20 5:55 PM`) is stored with the session and shown again when the
+  session is resumed, in the TUI and over remote control.
+- Subagents and multi-agent: the agent is told to hand multi-step work to a subagent by default. Single-agent sessions
+  are unchanged.
+
+### Fixed
+- The remote turn summary shows the date and time too.
+
 ## 0.7.5 — 2026-11-20
 
 ### Added

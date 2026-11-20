@@ -112,9 +112,9 @@ export async function loadProjectInstructions(cwd: string): Promise<Array<{ path
 export function agentsSection(parallel: number): string {
   return [
     '# Subagents',
-    'The task tool hands a self-contained job to a subagent with its own context window and returns its report. Use it for broad research that needs many file reads ("explore", read-only) or for independent multi-step work ("general"), so this conversation stays focused. The subagent cannot see this conversation: put everything it needs in the prompt. Do small tasks yourself; delegating costs a round trip.',
+    'The task tool hands a self-contained job to a subagent with its own context window and returns its report. Use it for broad research that needs many file reads ("explore", read-only) or for independent multi-step work ("general"), so this conversation stays focused. The subagent cannot see this conversation: put everything it needs in the prompt. Delegate by default: any job that takes more than a couple of steps goes to a subagent instead of being done in this conversation.',
     parallel > 1
-      ? `Several task calls in one response run in parallel (up to ${parallel} at a time): split independent work that way, then combine the reports.`
+      ? `Several task calls in one response run in parallel (up to ${parallel} at a time): send the independent parts together in one response rather than one after another, then combine the reports.`
       : 'Subagents run one at a time.',
   ].join('\n');
 }

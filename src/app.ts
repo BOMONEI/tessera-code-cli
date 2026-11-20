@@ -14,6 +14,8 @@ import { generateTitle } from './agent/compact.js';
 import type { AgentEvent, ImageInput } from './agent/agent.js';
 import { runShell } from './tools/shell.js';
 import { truncate } from './tools/context.js';
+import { formatClock, formatTiming, formatUsage } from './ui/format.js';
+import { fetchGoUsage, type GoUsage } from './cost/go.js';
 import { skillTools } from './tools/skill.js';
 import { SUBAGENT_ROLES, taskTool, type SubagentProgress } from './tools/task.js';
 import { discoverSkills, type Skill } from './skills.js';
@@ -83,6 +85,10 @@ export interface App {
   shell(command: string, signal?: AbortSignal): Promise<{ output: string; code: number | null }>;
   /** Persists model/thinking/mode/usage for resume. */
   saveState(): Promise<void>;
+  /** Finished turns' timing summaries (⏱ …); restored on resume. */
+  summaries(): Array<{ index: number; text: string }>;
+  /** The OpenCode Go server's own usage (percent per window); undefined for other providers or when unreachable. */
+  goUsage(): Promise<GoUsage | undefined>;
   setModel(id: string): Promise<void>;
   /** Continues another session of this directory, restoring its history and settings. */
   switchSession(id: string): Promise<void>;
@@ -430,6 +436,7 @@ export async function createApp(opts: AppOptions): Promise<App> {
       running = true;
       const firstTurn = !agent.messages.length && !title;
       let started = false;
+      let summary: Extract<AgentEvent, { type: 'turn-finish' }> | undefined;
       try {
         // MCP servers still starting: wait a little for them (their tools belong to this turn), but never for a slow
         // or dead one (its connect timeout is 15 s): the turn goes on with what is connected, the rest come next time.
@@ -450,15 +457,20 @@ export async function createApp(opts: AppOptions): Promise<App> {
           if (ev.type === 'compacted' && !started) checkpoints.begin(prompt, agent.messages);
           else if (ev.type === 'turn-finish' && ev.discarded) checkpoints.discard();
           else if (ev.type !== 'info') started = true;
-          // Timings cover the whole turn as the user saw it, including the MCP wait.
-          yield ev.type === 'turn-finish'
-            ? { ...ev, elapsedMs: ev.elapsedMs + waited, firstOutputMs: ev.firstOutputMs === undefined ? undefined : ev.firstOutputMs + waited }
-            : ev;
+          let out: AgentEvent = ev;
+          if (ev.type === 'turn-finish') {
+            // Timings cover the whole turn as the user saw it, including the MCP wait.
+            out = { ...ev, elapsedMs: ev.elapsedMs + waited, firstOutputMs: ev.firstOutputMs === undefined ? undefined : ev.firstOutputMs + waited };
+            // The timing line is remembered, so resuming the session shows it again.
+            if (!ev.discarded) summary = out;
+          }
+          yield out;
         }
       } finally {
         try {
           await checkpoints.end();
           await store.sync(agent);
+          if (summary) await store.addSummary(agent.messages.length, `${formatTiming(summary)} · ${formatUsage(summary.usage)} · ${formatClock()}`);
           await saveState();
         } finally {
           running = false;
@@ -487,6 +499,9 @@ export async function createApp(opts: AppOptions): Promise<App> {
       return { output: output.trim(), code };
     },
     saveState,
+    summaries: () => store.summaries,
+    // Real usage only for Go models: the allowance is theirs to spend; other providers have no such endpoint.
+    goUsage: () => (!agent.model.provider && agent.apiKey ? fetchGoUsage(agent.apiKey) : Promise.resolve(undefined)),
     setModel,
     switchSession: (id) => switchSession(id),
     async fork() {

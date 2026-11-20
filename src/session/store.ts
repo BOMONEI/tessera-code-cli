@@ -45,7 +45,9 @@ type Record =
   | ({ type: 'state' } & SessionState)
   | ({ type: 'checkpoint' } & Checkpoint)
   /** Drops checkpoints from `turn` on (after a rewind). */
-  | { type: 'rewind'; turn: number };
+  | { type: 'rewind'; turn: number }
+  /** A finished turn's timing line (⏱ …); `index` is the history length after that turn. */
+  | { type: 'turn-summary'; index: number; text: string; at: string };
 
 export interface SessionSummary {
   id: string;
@@ -61,6 +63,8 @@ export interface LoadedSession {
   title?: string;
   state?: SessionState;
   checkpoints: Checkpoint[];
+  /** Finished turns' timing lines (⏱ …), anchored to the history length after each turn. */
+  summaries: Array<{ index: number; text: string }>;
 }
 
 const BLOB_REF = 'tessera-blob:';
@@ -108,7 +112,7 @@ export function promptText(m: ModelMessage): string {
 }
 
 export function parseSession(raw: string): LoadedSession {
-  const out: LoadedSession = { messages: [], checkpoints: [] };
+  const out: LoadedSession = { messages: [], checkpoints: [], summaries: [] };
   for (const line of raw.split('\n')) {
     const rec = parseLine(line);
     if (!rec) continue;
@@ -118,6 +122,7 @@ export function parseSession(raw: string): LoadedSession {
         break;
       case 'reset':
         out.messages = [...rec.messages];
+        out.summaries = []; // the history was replaced (rewind, compaction): the summaries have no place any more
         break;
       case 'title':
         out.title = rec.title;
@@ -135,6 +140,9 @@ export function parseSession(raw: string): LoadedSession {
       case 'rewind':
         out.checkpoints = out.checkpoints.filter((c) => c.turn < rec.turn);
         break;
+      case 'turn-summary':
+        out.summaries.push({ index: rec.index, text: rec.text });
+        break;
     }
   }
   return out;
@@ -144,6 +152,8 @@ export class SessionStore {
   readonly path: string;
   /** Directory for file snapshots taken before edits (undo/rewind). */
   readonly blobDir: string;
+  /** Finished turns' timing lines, kept current by load(), addSummary() and sync()'s reset branch. */
+  summaries: Array<{ index: number; text: string }> = [];
   private savedCount = 0;
   private savedGeneration = 0;
   private savedState = '';
@@ -185,6 +195,7 @@ export class SessionStore {
   async sync(agent: { messages: ModelMessage[]; generation: number }): Promise<void> {
     if (agent.generation !== this.savedGeneration || agent.messages.length < this.savedCount) {
       await this.append({ type: 'reset', messages: await this.dehydrate(agent.messages), at: new Date().toISOString() });
+      this.summaries = []; // the history was replaced: earlier summaries no longer have a place
       this.savedCount = agent.messages.length;
       this.savedGeneration = agent.generation;
       return;
@@ -215,6 +226,12 @@ export class SessionStore {
     await this.append({ type: 'rewind', turn });
   }
 
+  /** Remembers a finished turn's timing line (⏱ …) so a resumed session can show it again. */
+  async addSummary(index: number, text: string): Promise<void> {
+    this.summaries = [...this.summaries, { index, text }];
+    await this.append({ type: 'turn-summary', index, text, at: new Date().toISOString() });
+  }
+
   /** Stores a file's pre-edit content; returns the blob name. */
   async saveBlob(content: Buffer): Promise<string> {
     const name = createHash('sha256').update(content).digest('hex').slice(0, 32);
@@ -230,8 +247,9 @@ export class SessionStore {
 
   /** Reads the whole session. Call adopt() once the agent holds the loaded history. */
   async load(): Promise<LoadedSession> {
-    const loaded = existsSync(this.path) ? parseSession(await readFile(this.path, 'utf8')) : { messages: [], checkpoints: [] };
+    const loaded = existsSync(this.path) ? parseSession(await readFile(this.path, 'utf8')) : { messages: [], checkpoints: [], summaries: [] };
     if (loaded.state) this.savedState = JSON.stringify(loaded.state);
+    this.summaries = loaded.summaries;
     loaded.messages = await this.rehydrate(loaded.messages);
     return loaded;
   }

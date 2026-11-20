@@ -140,6 +140,7 @@ describe('relay and link', () => {
         yield { type: 'turn-finish', usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cost: 0 }, finishReason: 'stop', elapsedMs: 1 };
       },
       close: async () => {},
+      summaries: () => [],
     } as unknown as App;
     const session = new SessionController(app);
     const hub: Hub = {

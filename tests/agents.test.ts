@@ -116,6 +116,24 @@ describe('system prompt', () => {
     expect(await buildSystemPrompt(process.cwd(), 'm', [], { parallel: 1 })).toContain('Subagents run one at a time.');
     expect(agentsSection(4)).toContain('run in parallel (up to 4 at a time)');
   });
+
+  it('encourages delegating when subagents are on, and never discourages it', () => {
+    for (const section of [agentsSection(1), agentsSection(4)]) {
+      expect(section).toContain('Delegate by default');
+      expect(section).not.toContain('Do small tasks yourself');
+    }
+    expect(agentsSection(4)).toContain('in one response rather than one after another');
+    const t = taskTool({
+      apiKey: 'k',
+      model: () => model,
+      tools: () => parentTools,
+      system: async () => '',
+      agentOptions: () => ({ maxSteps: 5, thinking: false, contextLimit: 500_000 }),
+      parallel: () => 1,
+    }) as unknown as { task: { description: string } };
+    expect(t.task.description).toContain('Prefer delegating');
+    expect(t.task.description).not.toContain('Do small tasks yourself');
+  });
 });
 
 describe('/agents', () => {

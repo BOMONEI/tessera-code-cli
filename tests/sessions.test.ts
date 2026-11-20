@@ -64,6 +64,23 @@ describe('session store', () => {
     expect((await SessionStore.list(cwd)).map((s) => s.id).sort()).toEqual(['forked', store.sessionId].sort());
   });
 
+  it('stores turn summaries and drops them when the history is replaced', async () => {
+    const { store } = project();
+    await store.sync({ messages: [user('a'), assistant('b')], generation: 0 });
+    await store.addSummary(2, '⏱ 1.0s · 3 in · 12 out');
+    await store.sync({ messages: [user('a'), assistant('b'), user('c'), assistant('d')], generation: 0 });
+    await store.addSummary(4, '⏱ 2.0s · 5 in · 3 out');
+    const loaded = await new SessionStore(store.cwd, store.sessionId).load();
+    expect(loaded.summaries).toEqual([
+      { index: 2, text: '⏱ 1.0s · 3 in · 12 out' },
+      { index: 4, text: '⏱ 2.0s · 5 in · 3 out' },
+    ]);
+    // A rewind or compaction replaces the history: the summaries have no place any more.
+    await store.sync({ messages: [user('a'), assistant('b')], generation: 1 });
+    expect(store.summaries).toEqual([]);
+    expect((await new SessionStore(store.cwd, store.sessionId).load()).summaries).toEqual([]);
+  });
+
   it('starts a new line after a truncated record instead of corrupting the next one', async () => {
     const { store } = project();
     await store.sync({ messages: [user('a')], generation: 0 });
@@ -229,6 +246,21 @@ describe('transcript replay', () => {
     const t = transcriptOf(messages, 5);
     expect(t[0]).toMatchObject({ kind: 'info', text: '… 45 earlier prompts not shown' });
     expect(t[1]).toEqual({ kind: 'user', text: 'q45' });
+  });
+
+  it('replays stored turn summaries after their turn, and drops ones from hidden turns', () => {
+    const messages: ModelMessage[] = [user('q1'), assistant('a1'), user('q2'), assistant('a2')];
+    const summaries = [
+      { index: 2, text: '⏱ 1.0s' },
+      { index: 4, text: '⏱ 2.0s' },
+    ];
+    const full = transcriptOf(messages, 30, summaries);
+    expect(full.map((e) => e.kind)).toEqual(['user', 'assistant', 'info', 'user', 'assistant', 'info']);
+    expect(full[2]).toEqual({ kind: 'info', text: '⏱ 1.0s' });
+    // The first turn is cut: its summary goes with it, the last turn's stays.
+    const trimmed = transcriptOf(messages, 1, summaries);
+    expect(trimmed.map((e) => e.kind)).toEqual(['info', 'user', 'assistant', 'info']);
+    expect(trimmed.at(-1)).toEqual({ kind: 'info', text: '⏱ 2.0s' });
   });
 });
 

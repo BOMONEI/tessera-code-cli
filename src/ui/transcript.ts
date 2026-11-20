@@ -20,13 +20,23 @@ function outputValue(output: unknown): { text: unknown; isError: boolean } {
   return { text: output, isError: false };
 }
 
-/** Rebuilds what the user saw from stored messages; shows only the last `maxTurns` prompts. */
-export function transcriptOf(messages: ModelMessage[], maxTurns = 30): TranscriptEntry[] {
+/**
+ * Rebuilds what the user saw from stored messages; shows only the last `maxTurns` prompts. `summaries` are finished
+ * turns' timing lines (⏱ …), inserted after the turn they describe (`index` is the history length after that turn).
+ */
+export function transcriptOf(messages: ModelMessage[], maxTurns = 30, summaries: ReadonlyArray<{ index: number; text: string }> = []): TranscriptEntry[] {
   const out: TranscriptEntry[] = [];
   const labels = new Map<string, { label: string; fullLabel?: string }>();
   let turns = 0;
   let skipAck = false;
+  let pos = 0; // position in `messages`: a summary whose index is reached sits before the next message
+  let si = 0;
+  const flushSummaries = () => {
+    while (si < summaries.length && summaries[si]!.index <= pos) out.push({ kind: 'info', text: summaries[si++]!.text });
+  };
   for (const m of messages) {
+    flushSummaries();
+    pos++;
     if (m.role === 'system') continue;
     if (m.role === 'user') {
       const text = promptText(m).trim();
@@ -72,6 +82,7 @@ export function transcriptOf(messages: ModelMessage[], maxTurns = 30): Transcrip
       }
     }
   }
+  flushSummaries(); // a summary of the last turn, and any left over (defensive)
   if (turns <= maxTurns) return out;
   // Cut before the (turns - maxTurns + 1)-th user prompt.
   let seen = 0;
