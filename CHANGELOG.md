@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.13 — 2026-11-20
+
+### Fixed
+- Korean (and other IME) typing broke mid-composition. The gauges are refreshed only at turn boundaries — the
+  once-a-minute idle timer is gone, unchanged values cause no re-render, and subagent progress is coalesced in a
+  400ms debounce instead of one redraw per tool call. The idle input is never redrawn by itself any more; the
+  trade-off is that the gauges update at the next response, not while idle.
+
 ## 0.7.12 — 2026-11-20
 
 ### Fixed

@@ -349,10 +349,20 @@ export function TuiApp({
   const [spend, setSpend] = useState<SpendWindows | undefined>();
   /** The Go server's own usage when this is a Go model; the gauges prefer it over the local estimate. */
   const [go, setGo] = useState<GoUsage | undefined>();
-  /** Re-reads the gauges: the local ledger always, plus the Go server's own numbers when this is a Go model. */
+  /** Re-reads the gauges: the local ledger always, plus the Go server's own numbers when this is a Go model.
+   *  Unchanged values keep the old state object, so an idle screen is not re-rendered while the user types
+   *  (a re-render breaks an IME composition). */
   const refreshSpend = useCallback(() => {
-    void spendWindows().then(setSpend);
-    void core.goUsage().then(setGo);
+    void spendWindows().then((w) =>
+      setSpend((prev) => (prev && w && prev.fiveHour === w.fiveHour && prev.week === w.week && prev.month === w.month ? prev : w)),
+    );
+    void core.goUsage().then((g) =>
+      setGo((prev) =>
+        prev && g && prev.fiveHour === g.fiveHour && prev.week === g.week && prev.month === g.month && prev.fiveHourReset === g.fiveHourReset && prev.weekReset === g.weekReset && prev.monthReset === g.monthReset
+          ? prev
+          : g,
+      ),
+    );
   }, [core]);
   const [mcp, setMcp] = useState(() => mcpCounts(core.mcpStatus));
   /** A newer release, when there is one (checked in the background at most once a day). */
@@ -494,18 +504,35 @@ export function TuiApp({
     // Each subagent gets its own line (several run at once in multi-agent mode). A finished one lingers briefly —
     // 5s when its report is ready, 30s on a failure or interrupt (claude-code keeps failures visible longer) — and
     // background ones keep their line even after the turn ended.
+    // Progress arrives in bursts (one event per tool call); each immediate update re-renders the input while the
+    // user types, which breaks an IME composition — so they are coalesced in a short debounce.
+    let batch: SubagentProgress[] = [];
+    let progressTimer: ReturnType<typeof setTimeout> | undefined;
     core.onTaskProgress = (p) => {
-      if (p.state === 'done') {
-        const delay = p.activity.includes('finished') ? 5_000 : 30_000;
-        setTimeout(() => setSubagents((list) => list.filter((s) => s.id !== p.id)), delay).unref?.();
-      }
-      setSubagents((list) => {
-        const i = list.findIndex((s) => s.id === p.id);
-        if (i < 0) return [...list, { ...p, since: Date.now() }];
-        const next = [...list];
-        next[i] = { ...next[i]!, ...p, since: next[i]!.state === 'queued' && p.state === 'running' ? Date.now() : next[i]!.since };
-        return next;
-      });
+      batch.push(p);
+      progressTimer ??= setTimeout(() => {
+        const latest = new Map(batch.map((p) => [p.id, p])); // earlier states of the same subagent are superseded
+        batch = [];
+        progressTimer = undefined;
+        setSubagents((list) => {
+          let next = list;
+          for (const p of latest.values()) {
+            const i = next.findIndex((s) => s.id === p.id);
+            if (i < 0) next = [...next, { ...p, since: Date.now() }];
+            else {
+              next = [...next];
+              next[i] = { ...next[i]!, ...p, since: next[i]!.state === 'queued' && p.state === 'running' ? Date.now() : next[i]!.since };
+            }
+          }
+          return next;
+        });
+        for (const p of latest.values()) {
+          if (p.state === 'done') {
+            const delay = p.activity.includes('finished') ? 5_000 : 30_000;
+            setTimeout(() => setSubagents((list) => list.filter((s) => s.id !== p.id)), delay).unref?.();
+          }
+        }
+      }, 400);
     };
     agent.onCompactProgress = (p) => setStatus(p.phase === 'done' ? (turnRef.current ? 'Thinking' : undefined) : compactLabel(p));
     bridge.ask = (req) => new Promise<Decision>((resolve) => setPending({ req, resolve }));
@@ -527,13 +554,8 @@ export function TuiApp({
         });
     }
     void core.listSkills().then((skills) => loadCommands(core.ctx.cwd, skills)).then((all) => setCommands(all.map(({ name, description, argHint }) => ({ name, description, argHint }))));
+    return () => clearTimeout(progressTimer);
   }, [bridge, core.ctx.cwd]);
-
-  // Spend windows roll with time, so an idle session re-checks them now and then (each turn refreshes them too).
-  useEffect(() => {
-    const timer = setInterval(refreshSpend, 60_000);
-    return () => clearInterval(timer);
-  }, [refreshSpend]);
 
   // Streaming markdown: finished blocks are rendered and printed for good; only the block still being written
   // stays in the live area (re-rendered as it grows, throttled).
