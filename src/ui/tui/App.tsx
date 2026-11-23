@@ -479,11 +479,12 @@ export function TuiApp({
 
   useEffect(() => {
     // Compaction (auto or /compact) reports an estimated percentage; it replaces the spinner label meanwhile.
-    // Each subagent gets its own line (several run at once in multi-agent mode); a finished one leaves the list.
+    // Each subagent gets its own line (several run at once in multi-agent mode); a finished one stays until the
+    // turn's end shows its report is ready — background ones keep their line even after the turn ended.
     core.onTaskProgress = (p) =>
       setSubagents((list) => {
-        if (p.state === 'done') return list.filter((s) => s.id !== p.id);
         const i = list.findIndex((s) => s.id === p.id);
+        if (i < 0) return [...list, { ...p, since: Date.now() }];
         if (i < 0) return [...list, { ...p, since: Date.now() }];
         const next = [...list];
         next[i] = { ...next[i]!, ...p, since: next[i]!.state === 'queued' && p.state === 'running' ? Date.now() : next[i]!.since };
@@ -558,7 +559,6 @@ export function TuiApp({
     return controller;
   };
   const endBusy = () => {
-    setSubagents([]); // an interrupted turn leaves no subagent lines behind
     abortRef.current = undefined;
     busyRef.current = false;
     setBusy(false);
@@ -1182,7 +1182,7 @@ export function TuiApp({
             </Text>
           </Box>
         ) : null}
-        {busy && !pending && subagents.length ? (
+        {subagents.length ? (
           <Box flexDirection="column">
             {subagents.slice(0, MAX_SUBAGENT_ROWS).map((s, i, shown) => (
               <Text key={s.id} wrap="truncate">

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.7.10 — 2026-11-20
+
+### Added
+- The task tool starts a subagent in the background and returns at once, so the main agent keeps working while it
+  runs. Reports arrive with the next prompt (a completion notification); the new `tasks` tool lists progress, and
+  `wait: true` blocks for the result instead. Background subagents survive `esc` and are stopped when the session is
+  replaced (`/clear`, `/resume`, `/fork`).
+- Subagent reports are treated as claims: the orchestrator spot-checks the load-bearing parts before passing them on.
+
+### Changed
+- The subagent panel stays after the turn ends, so background work remains visible.
+
 ## 0.7.9 — 2026-11-20
 
 ### Added

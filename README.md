@@ -241,6 +241,10 @@ The choice is saved and applies at once; the bottom bar shows `agents: sub` / `a
 what a subagent is doing. Subagents cost extra requests (their spend counts toward the session and the 5h budget), so
 they pay off for broad research and independent work, not small edits.
 
+A `task` call starts the subagent in the background and returns at once — the main agent keeps working and the report
+arrives with the next prompt (`tasks` lists progress; `wait: true` blocks for the result instead). Background
+subagents survive `esc` and are stopped when the session is replaced (`/clear`, `/resume`, `/fork`).
+
 ## Remote control (preview)
 
 Design, protocol and security model: [docs/remote-control.md](docs/remote-control.md).

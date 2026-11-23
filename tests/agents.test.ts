@@ -60,7 +60,7 @@ function makeTask(parallel: number) {
     onUsage: (u) => absorbed.push(u.inputTokens),
   }).task as unknown as { execute: (i: object, o: object) => Promise<string> };
   let n = 0;
-  const run = (prompt: string) => t.execute({ description: prompt, prompt, subagent_type: 'explore' }, { abortSignal: undefined, toolCallId: `call${++n}`, messages: [] });
+  const run = (prompt: string) => t.execute({ description: prompt, prompt, subagent_type: 'explore', wait: true }, { abortSignal: undefined, toolCallId: `call${++n}`, messages: [] });
   return { run, absorbed, progress };
 }
 
@@ -76,7 +76,7 @@ describe('subagents', () => {
     expect(out).toMatch(/^REPORT for alpha/);
     expect(out).toContain('[explore subagent · 0 tool calls]');
     expect(absorbed).toEqual([100]);
-    expect(progress).toEqual(['call1:look at alpha:running:starting', 'call1:look at alpha:done:finished']); // a free slot: never reported as queued
+    expect(progress).toEqual(['call1:look at alpha:running:starting', 'call1:look at alpha:done:finished — report ready']); // a free slot: never reported as queued
   });
 
   it('runs one at a time with subagents, in parallel with multi-agent', async () => {
@@ -107,6 +107,50 @@ describe('subagents', () => {
     const multi = makeTask(4);
     await Promise.all([multi.run('alpha'), multi.run('beta')]);
     expect(multi.progress.filter((p) => p.includes(':queued:'))).toEqual([]);
+  });
+});
+
+describe('background subagents', () => {
+  const make = (onFinished?: (r: { id: string; type: string; description: string; report: string; errors: string[]; toolCalls: number }) => void, parallel = 2) =>
+    taskTool({
+      apiKey: 'k',
+      model: () => model,
+      tools: () => parentTools,
+      system: async () => 's',
+      agentOptions: () => ({ maxSteps: 5, thinking: false, contextLimit: 500_000 }),
+      parallel: () => parallel,
+      onFinished,
+    }) as unknown as {
+      task: { execute: (i: object, o: object) => Promise<string> };
+      tasks: { execute: (i: object, o: object) => Promise<string> };
+      cancelAll: () => void;
+    };
+  const spawn = (t: ReturnType<typeof make>, description: string, id: string) =>
+    t.task.execute({ description, prompt: description, subagent_type: 'explore' }, { abortSignal: undefined, toolCallId: id, messages: [] });
+
+  it('returns at once and delivers the report when the subagent finishes', async () => {
+    const finished: Array<{ description: string; report: string }> = [];
+    const t = make((r) => finished.push(r));
+    expect(await spawn(t, 'look at alpha', 'b1')).toContain('Background subagent started');
+    while (!finished.length) await new Promise((r) => setTimeout(r, 20));
+    expect(finished[0]!.report).toContain('REPORT for alpha');
+    expect(await t.tasks.execute({}, {})).toContain('No background subagents'); // collected: not listed any more
+    await new Promise((r) => setTimeout(r, 50));
+    expect(finished).toHaveLength(1); // delivered once
+  });
+
+  it('lists them with the tasks tool; cancelAll stops the ones that never started', async () => {
+    const finished: Array<{ description: string; report: string }> = [];
+    const t = make((r) => finished.push(r), 1); // one slot: beta waits behind alpha
+    await Promise.all([spawn(t, 'alpha', 'b1'), spawn(t, 'beta', 'b2')]);
+    const listing = (await t.tasks.execute({}, {})) as string;
+    expect(listing).toContain('[running] explore: alpha');
+    expect(listing).toContain('[queued] explore: beta');
+    t.cancelAll(); // a session switch: both are stopped, whatever their state
+    while (finished.length < 2) await new Promise((r) => setTimeout(r, 20));
+    const reports = finished.map((f) => f.report);
+    expect(reports.every((r) => r.includes('interrupted'))).toBe(true);
+    expect(await t.tasks.execute({}, {})).toContain('No background subagents');
   });
 });
 

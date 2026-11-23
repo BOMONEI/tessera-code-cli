@@ -215,6 +215,8 @@ export async function createApp(opts: AppOptions): Promise<App> {
   const checkpoints = new Checkpoints(() => store, opts.cwd);
   let title: string | undefined;
   const pendingShell: string[] = [];
+  /** Reports of background subagents that finished uncollected: they go out with the next prompt. */
+  const pendingReports: string[] = [];
   // One turn at a time; session switches and rewinds must not interleave with a running turn (its end would
   // overwrite the history they install).
   let running = false;
@@ -264,7 +266,8 @@ export async function createApp(opts: AppOptions): Promise<App> {
         hooks.configured ? !(await hooks.run('PreToolUse', { tool: 'read', input: { path: abs } })).blocked : true,
       );
       const shell = pendingShell.length ? `Commands the user ran in the terminal:\n${pendingShell.splice(0).join('\n\n')}` : undefined;
-      return { context: [hook.context, shell, files.context].filter(Boolean).join('\n\n') || undefined, notes: files.notes };
+      const reports = pendingReports.length ? `Reports from your background subagents:\n\n${pendingReports.splice(0).join('\n\n')}` : undefined;
+      return { context: [hook.context, shell, reports, files.context].filter(Boolean).join('\n\n') || undefined, notes: files.notes };
     },
     afterTurn: hooks.configured ? async () => void (await hooks.run('Stop', {})) : undefined,
   });
@@ -272,7 +275,7 @@ export async function createApp(opts: AppOptions): Promise<App> {
   ctx.showImages = (label, images) => agent.attachImages(label, images);
   ctx.canSeeImages = () => agent.model.images === true;
 
-  const task = taskTool({
+  const { task, tasks, cancelAll: cancelSubagents } = taskTool({
     apiKey: auth.key,
     model: () => agent.model,
     tools: () => agent.tools,
@@ -281,10 +284,16 @@ export async function createApp(opts: AppOptions): Promise<App> {
     parallel,
     onProgress: (p) => app.onTaskProgress?.(p),
     onUsage: (u) => agent.absorbUsage(u),
+    // An uncollected report goes out with the next prompt (like a completion notification).
+    onFinished: (t) =>
+      pendingReports.push(
+        `Subagent report (${t.type}, ${t.description}):\n\n${t.report}${t.errors.length ? `\n\n[subagent errors: ${t.errors.join('; ')}]` : ''}`,
+      ),
   });
-  /** The agent's tools: built-ins, connected MCP servers, and the task tool when subagents are on. */
+  /** The agent's tools: built-ins, connected MCP servers, and the subagent tools when subagents are on. */
   const rebuildTools = () => {
-    agent.tools = guardTools({ ...buildTools(ctx), ...mcpTools, ...(agentsOn() ? task : {}) }, hooks, permissions, mcpServerOf);
+    const extras: ToolSet = agentsOn() ? { task, tasks } : {};
+    agent.tools = guardTools({ ...buildTools(ctx), ...mcpTools, ...extras }, hooks, permissions, mcpServerOf);
   };
   if (agentsOn()) rebuildTools();
   applyMcp = (m) => {
@@ -343,6 +352,8 @@ export async function createApp(opts: AppOptions): Promise<App> {
   const adoptSession = async (next: SessionStore, loaded: { messages: import('ai').ModelMessage[]; title?: string; state?: SessionState; checkpoints: Checkpoint[] }, keep: { model?: boolean; thinking?: boolean; mode?: boolean } = {}) => {
     store = next;
     pendingShell.length = 0; // "!cmd" output belongs to the session it was run in
+    pendingReports.length = 0; // the reports belong to the session they were run in
+    cancelSubagents(); // background subagents do not survive a session switch
     agent.switchSession(next.sessionId, loaded.messages, loaded.state?.total);
     // The saved gauge is the last real request size; the estimate would be far off for a long (Korean) history.
     if (typeof loaded.state?.contextTokens === 'number') agent.contextTokens = loaded.state.contextTokens;
