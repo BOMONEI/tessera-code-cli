@@ -370,6 +370,8 @@ export function TuiApp({
   const [agentsMode, setAgentsModeState] = useState(() => core.agentsMode());
   /** Subagents running or waiting for a slot, in start order: one line each under the spinner. */
   const [subagents, setSubagents] = useState<Array<SubagentProgress & { since: number }>>([]);
+  /** The subagent live-tail viewer: which panel row is open (undefined = closed). */
+  const [subagentView, setSubagentView] = useState<number | undefined>();
   const [, forceRender] = useState(0);
   // Prompts typed in this directory, newest first (persisted across sessions).
   const historyRef = useRef<string[]>([]);
@@ -556,6 +558,17 @@ export function TuiApp({
     void core.listSkills().then((skills) => loadCommands(core.ctx.cwd, skills)).then((all) => setCommands(all.map(({ name, description, argHint }) => ({ name, description, argHint }))));
     return () => clearTimeout(progressTimer);
   }, [bridge, core.ctx.cwd]);
+
+  // The terminal tab shows the session: the folder until a title is generated (after the first turn), then the
+  // session title. Checked after every render, since the title can change without a state update (/rename, resume).
+  const tabTitle = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const t = core.title;
+    if (t === tabTitle.current) return;
+    tabTitle.current = t;
+    const label = (t ?? core.ctx.cwd.split('/').filter(Boolean).pop() ?? core.ctx.cwd).replace(/[\x00-\x1f\x7f]/g, ' ');
+    process.stdout.write(`\x1b]0;tessera-code · ${label}\x07`);
+  });
 
   // Streaming markdown: finished blocks are rendered and printed for good; only the block still being written
   // stays in the live area (re-rendered as it grows, throttled).
@@ -916,6 +929,12 @@ export function TuiApp({
 
   useInput((ch, key) => {
     if (pending || choice) return;
+    if (subagentView !== undefined) {
+      // The live-tail viewer is modal: ↑↓ pick another subagent, esc closes.
+      if (key.escape) return setSubagentView(undefined);
+      if (key.upArrow || key.downArrow) return setSubagentView((subagentView + (key.upArrow ? subagents.length - 1 : 1)) % Math.max(1, subagents.length));
+      return;
+    }
     if (search) {
       const match = searchMatch >= 0 ? historyRef.current[searchMatch]! : undefined;
       if (key.escape || (key.ctrl && (ch === 'g' || ch === 'c'))) setSearch(undefined);
@@ -957,6 +976,11 @@ export function TuiApp({
       return;
     }
     if (mouse && (key.pageUp || key.pageDown)) return scrollBy((key.pageUp ? -1 : 1) * Math.max(1, viewH - 2));
+    if (key.ctrl && ch === 'b') {
+      // Open the live tail of the running subagents (claude-code's subagent panel → Enter).
+      if (subagents.length) setSubagentView(0);
+      return;
+    }
     if (key.ctrl && ch === 't') {
       // on → auto → off → on
       if (!agent.thinking) [agent.thinking, agent.thinkingAuto] = [true, false];
@@ -1295,6 +1319,37 @@ export function TuiApp({
             </>
           )}
         </Box>
+        {subagentView !== undefined && subagents.length ? (
+          <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1} marginTop={1}>
+            {(() => {
+              const i = Math.min(subagentView, subagents.length - 1);
+              const s = subagents[i]!;
+              return (
+                <>
+                  <Text wrap="truncate">
+                    <Text color="cyan">{`subagent ${i + 1}/${subagents.length}: ${s.type} — `}</Text>
+                    {middleEllipsis(s.description, 40)}
+                    <Text dimColor>  (esc close · ↑↓ switch)</Text>
+                  </Text>
+                  {(() => {
+                    const blocks = core.subagentTail?.(s.id) ?? [];
+                    const shown = blocks.slice(-12);
+                    return shown.length
+                      ? shown.map((b, k) => (
+                          <Text key={k} wrap="truncate" dimColor={b.kind === 'reasoning'} color={b.kind === 'tool' ? 'cyan' : undefined}>
+                            {b.kind === 'tool' ? '● ' : b.kind === 'reasoning' ? '∴ ' : ''}
+                            {b.text.replace(/\s+/g, ' ').trim().slice(0, 200)}
+                          </Text>
+                        ))
+                      : (
+                          <Text dimColor>  waiting for its first output…</Text>
+                        );
+                  })()}
+                </>
+              );
+            })()}
+          </Box>
+        ) : null}
         {menu ? (
           <Box flexDirection="column" paddingX={2}>
             {menuShown.map((item, k) => {

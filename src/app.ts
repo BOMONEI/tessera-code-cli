@@ -17,7 +17,7 @@ import { truncate } from './tools/context.js';
 import { formatClock, formatTiming, formatUsage } from './ui/format.js';
 import { fetchGoUsage, type GoUsage } from './cost/go.js';
 import { skillTools } from './tools/skill.js';
-import { SUBAGENT_ROLES, taskTool, type SubagentProgress } from './tools/task.js';
+import { SUBAGENT_ROLES, taskTool, type SubagentBlock, type SubagentProgress } from './tools/task.js';
 import { discoverSkills, type Skill } from './skills.js';
 import { attachMentionedFiles } from './agent/attachments.js';
 import { HookRunner } from './hooks.js';
@@ -89,6 +89,8 @@ export interface App {
   summaries(): Array<{ index: number; text: string }>;
   /** The OpenCode Go server's own usage (percent per window); undefined for other providers or when unreachable. */
   goUsage(): Promise<GoUsage | undefined>;
+  /** Live tail of a background subagent (the panel viewer); undefined when the id is unknown. */
+  subagentTail(id: string): SubagentBlock[] | undefined;
   setModel(id: string): Promise<void>;
   /** Continues another session of this directory, restoring its history and settings. */
   switchSession(id: string): Promise<void>;
@@ -266,8 +268,12 @@ export async function createApp(opts: AppOptions): Promise<App> {
         hooks.configured ? !(await hooks.run('PreToolUse', { tool: 'read', input: { path: abs } })).blocked : true,
       );
       const shell = pendingShell.length ? `Commands the user ran in the terminal:\n${pendingShell.splice(0).join('\n\n')}` : undefined;
-      const reports = pendingReports.length ? `Reports from your background subagents:\n\n${pendingReports.splice(0).join('\n\n')}` : undefined;
-      return { context: [hook.context, shell, reports, files.context].filter(Boolean).join('\n\n') || undefined, notes: files.notes };
+      const reportList = pendingReports.splice(0);
+      const reports = reportList.length ? `Reports from your background subagents:\n\n${reportList.join('\n\n')}` : undefined;
+      return {
+        context: [hook.context, shell, reports, files.context].filter(Boolean).join('\n\n') || undefined,
+        notes: [...files.notes, ...(reportList.length ? [`${reportList.length} background subagent report${reportList.length === 1 ? '' : 's'} arrived and were folded into this prompt`] : [])],
+      };
     },
     afterTurn: hooks.configured ? async () => void (await hooks.run('Stop', {})) : undefined,
   });
@@ -275,12 +281,12 @@ export async function createApp(opts: AppOptions): Promise<App> {
   ctx.showImages = (label, images) => agent.attachImages(label, images);
   ctx.canSeeImages = () => agent.model.images === true;
 
-  const { task, tasks, cancelAll: cancelSubagents } = taskTool({
+  const { task, tasks, tail: subagentTailTool, cancelAll: cancelSubagents } = taskTool({
     apiKey: auth.key,
     model: () => agent.model,
     tools: () => agent.tools,
     system: async (type) => `${await systemPrompt(agent.model.id)}\n\n# Your role\n${SUBAGENT_ROLES[type]}`.replace(/\n\n# Subagents[\s\S]*?(?=\n\n# )/, ''),
-    agentOptions: () => ({ maxSteps: config.maxSteps, thinking: agent.thinking, thinkingLevel: agent.thinkingLevel, contextLimit: config.contextLimit }),
+    agentOptions: () => ({ maxSteps: config.maxSteps, thinking: agent.thinking, thinkingLevel: agent.thinkingLevel, thinkingAuto: agent.thinkingAuto, contextLimit: config.contextLimit }),
     parallel,
     onProgress: (p) => app.onTaskProgress?.(p),
     onUsage: (u) => agent.absorbUsage(u),
@@ -515,6 +521,7 @@ export async function createApp(opts: AppOptions): Promise<App> {
     summaries: () => store.summaries,
     // Real usage only for Go models: the allowance is theirs to spend; other providers have no such endpoint.
     goUsage: () => (!agent.model.provider && agent.apiKey ? fetchGoUsage(agent.apiKey) : Promise.resolve(undefined)),
+    subagentTail: (id) => subagentTailTool(id),
     setModel,
     switchSession: (id) => switchSession(id),
     async fork() {

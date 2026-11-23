@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.7.14 — 2026-11-20
+
+### Added
+- Inspect a running subagent: `ctrl+b` opens its live tail (recent reasoning, answers and tool calls), `↑↓` switches,
+  `esc` closes.
+- The session title shows in the terminal tab: the folder until the first turn generates the title, then the title
+  (`/rename`, `/resume`, `/fork` and `/new` update it).
+- Subagents follow the parent's thinking mode in `/think auto` too: they pick their own level per task under the same
+  cap (they used to always think at the cap).
+- The `tasks` tool collects the finished reports right away, so the agent can use them in the same turn; uncollected
+  ones still arrive with the next prompt, announced by a note.
+
 ## 0.7.13 — 2026-11-20
 
 ### Fixed

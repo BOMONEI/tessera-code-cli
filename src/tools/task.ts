@@ -38,6 +38,12 @@ export interface SubagentProgress {
   activity: string;
 }
 
+/** One block of a subagent's live tail (the viewer): its reasoning, an answer chunk, or a tool call. */
+export interface SubagentBlock {
+  kind: 'text' | 'reasoning' | 'tool';
+  text: string;
+}
+
 /** A finished background subagent's report, delivered once (to the tasks tool or with the next prompt). */
 export interface FinishedSubagent {
   id: string;
@@ -111,6 +117,8 @@ interface Entry {
   collected?: boolean;
   /** Background runs get their own signal, so they outlive the turn that spawned them. */
   ctrl: AbortController;
+  /** Live tail for the viewer: the most recent blocks (reasoning, answer chunks, tool calls). */
+  blocks: SubagentBlock[];
 }
 
 export function taskTool(opts: TaskToolOptions) {
@@ -137,17 +145,44 @@ export function taskTool(opts: TaskToolOptions) {
         let text = '';
         t.errors = [];
         t.toolCalls = 0;
+        // The live tail: reasoning and answer deltas are gathered into blocks, tool calls become one line each.
+        let kind: SubagentBlock['kind'] | undefined;
+        let buf = '';
+        const pushBlock = (b: SubagentBlock) => {
+          t.blocks.push(b);
+          if (t.blocks.length > 60) t.blocks.splice(0, t.blocks.length - 60); // keep the recent tail only
+        };
+        const flushBuf = () => {
+          if (kind && buf.trim()) pushBlock({ kind, text: buf });
+          buf = '';
+          kind = undefined;
+        };
         for await (const ev of sub.run(t.prompt, abortSignal)) {
-          if (ev.type === 'text') text += ev.text;
-          else if (ev.type === 'tool-call') {
+          if (ev.type === 'text') {
+            if (kind !== 'text') {
+              flushBuf();
+              kind = 'text';
+            }
+            buf += ev.text;
+            text += ev.text;
+          } else if (ev.type === 'reasoning') {
+            if (kind !== 'reasoning') {
+              flushBuf();
+              kind = 'reasoning';
+            }
+            buf += ev.text;
+          } else if (ev.type === 'tool-call') {
+            flushBuf();
             t.toolCalls++;
             text = ''; // only the text after the last tool call is the report
             const input = (ev.input ?? {}) as Record<string, unknown>;
             const raw = String(input.path ?? input.command ?? input.pattern ?? input.name ?? '').replace(/\s+/g, ' ');
             const arg = (isAbsolute(raw) && !relative(process.cwd(), raw).startsWith('..') ? relative(process.cwd(), raw) || '.' : raw).slice(0, 60);
+            pushBlock({ kind: 'tool', text: `${ev.name}(${arg})` });
             report('running', `${ev.name}(${arg})`);
           } else if (ev.type === 'error') t.errors.push(ev.message);
         }
+        flushBuf();
         opts.onUsage?.(sub.total);
         report('done', t.errors.length ? 'finished with errors' : 'finished — report ready');
         if (abortSignal?.aborted) throw new Error('Interrupted.');
@@ -179,8 +214,8 @@ export function taskTool(opts: TaskToolOptions) {
         'Delegate a self-contained task to a subagent with its own context window. Use "explore" for broad research or searches that need ' +
         'many file reads (read-only), "general" for independent multi-step work. The subagent cannot see this conversation: the prompt must ' +
         'contain everything it needs. You are the orchestrator: past one or two tool calls, hand the job to a subagent instead of doing it ' +
-        'here. It starts in the background and returns at once; its report arrives with your next prompt (progress via the tasks tool). ' +
-        'Pass wait: true only when nothing else can proceed without the result.',
+        'here. It starts in the background and returns at once; collect its report with the tasks tool (or it arrives with your next ' +
+        'prompt). Pass wait: true only when nothing else can proceed without the result.',
       inputSchema: z.object({
         description: z.string().describe('3-5 word summary of the task'),
         prompt: z.string().describe('Complete, self-contained instructions for the subagent'),
@@ -188,7 +223,7 @@ export function taskTool(opts: TaskToolOptions) {
         wait: z.boolean().optional().describe('true: block until the subagent finishes and return its report now'),
       }),
       execute: async ({ description, prompt, subagent_type, wait }, { abortSignal, toolCallId }) => {
-        const t: Entry = { id: toolCallId, type: subagent_type, description, prompt, state: 'queued', activity: 'starting', errors: [], toolCalls: 0, ctrl: new AbortController() };
+        const t: Entry = { id: toolCallId, type: subagent_type, description, prompt, state: 'queued', activity: 'starting', errors: [], toolCalls: 0, ctrl: new AbortController(), blocks: [] };
         if (wait) return runner(t, abortSignal);
         // Background: the run keeps its own signal, so it outlives the turn (esc and cut-in do not kill it); it is
         // cancelled when the session is replaced.
@@ -201,21 +236,32 @@ export function taskTool(opts: TaskToolOptions) {
             t.result = t.result ?? `(the subagent ${t.activity}: ${errorMessage(e)})`;
             deliver(t);
           });
-        return (
-          `Background subagent started (${subagent_type}): ${description}. Keep working — its report arrives with your next prompt, ` +
-          'or check on it with the tasks tool. Pass wait: true if you need the result right now.'
-        );
+        return `Background subagent started (${subagent_type}): ${description}. Collect its report with the tasks tool — anything uncollected also arrives with your next prompt.`;
       },
     }),
     tasks: tool({
-      description: 'Check on the background subagents: which are running, queued, or finished. Their reports are delivered to you automatically with your next prompt.',
+      description:
+        'Check on the background subagents and collect the reports of the finished ones right away (running and queued ones are listed). ' +
+        'Anything left running arrives with your next prompt.',
       inputSchema: z.object({}),
       execute: async () => {
         const entries = [...background.values()];
         if (!entries.length) return 'No background subagents.';
-        return entries.map((t) => `- [${t.state}] ${t.type}: ${t.description} — ${t.activity}`).join('\n');
+        const parts: string[] = [];
+        for (const t of entries) {
+          if (t.state === 'done' && !t.collected) {
+            t.collected = true;
+            background.delete(t.id); // collected here: onFinished must not deliver it again
+            parts.push(`[report] ${t.type}: ${t.description}\n${t.result ?? '(no report)'}`);
+          } else {
+            parts.push(`- [${t.state}] ${t.type}: ${t.description} — ${t.activity}`);
+          }
+        }
+        return parts.join('\n\n');
       },
     }),
+    /** The live tail of a background subagent (the viewer); undefined when the id is unknown. */
+    tail: (id: string) => background.get(id)?.blocks,
     /** Cancels every still-running background subagent (the session is being replaced). */
     cancelAll: () => {
       for (const t of background.values()) if (t.state !== 'done') t.ctrl.abort();
