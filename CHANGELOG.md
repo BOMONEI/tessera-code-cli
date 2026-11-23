@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.11 — 2026-11-20
+
+### Added
+- The 5h/week/month gauges end with the time left until each window resets, e.g. `5h ▕█░░░░░░░░░▏ 5% (2h 15m)`. On Go
+  models the server's reset time is used; the local estimate falls back to 5 hours after the window's first spend and
+  next Monday 00:00 UTC (the billing period is unknown, so the month gauge shows no reset there).
+
 ## 0.7.10 — 2026-11-20
 
 ### Added

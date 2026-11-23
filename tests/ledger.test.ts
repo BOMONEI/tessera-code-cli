@@ -21,6 +21,10 @@ describe('spend ledger', () => {
 
     await recordSpend('m', 0.5);
     expect((await spendWindows()).fiveHour).toBe(5.5);
+    // Reset estimates: the 5h window 5 hours after its earliest spend, the week at the next Monday 00:00 UTC.
+    const w = await spendWindows();
+    expect(w.fiveHourReset).toBeGreaterThan(Date.now());
+    expect(w.weekReset).toBeGreaterThan(Date.now());
   });
 
   it('concurrent reads do not count new lines twice', async () => {

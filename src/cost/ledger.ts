@@ -26,6 +26,10 @@ export interface SpendWindows {
   fiveHour: number;
   week: number;
   month: number;
+  /** Rough reset estimates (epoch ms): the 5h window resets 5 hours after its earliest spend; the week resets
+   *  Monday 00:00 UTC (OpenCode Go's rule). The month's billing period is unknown, so there is no estimate there. */
+  fiveHourReset?: number;
+  weekReset?: number;
 }
 
 const HOUR = 3_600_000;
@@ -76,13 +80,26 @@ async function readAppended(now: number): Promise<Entry[]> {
   return cache.entries;
 }
 
+/** Next Monday 00:00 UTC (the weekly window resets then, at least 24h away). */
+function nextMondayUTC(now: number): number {
+  const d = new Date(now);
+  const days = (8 - d.getUTCDay()) % 7 || 7;
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + days);
+}
+
 export async function spendWindows(now = Date.now()): Promise<SpendWindows> {
   const w: SpendWindows = { fiveHour: 0, week: 0, month: 0 };
+  let earliest5 = Infinity;
   for (const e of await readNew(now)) {
     const age = now - e.t;
-    if (age < 5 * HOUR) w.fiveHour += e.cost;
+    if (age < 5 * HOUR) {
+      w.fiveHour += e.cost;
+      earliest5 = Math.min(earliest5, e.t); // the window started at the first use: it resets 5 hours after that
+    }
     if (age < 7 * 24 * HOUR) w.week += e.cost;
     if (age < MONTH) w.month += e.cost;
   }
+  if (Number.isFinite(earliest5)) w.fiveHourReset = earliest5 + 5 * HOUR;
+  if (w.week > 0) w.weekReset = nextMondayUTC(now);
   return w;
 }

@@ -129,6 +129,9 @@ describe('UsageBar', () => {
     const withLimit = strip(renderToString(createElement(UsageBar, { label: 'ctx', percent: 38, suffix: '(300k)' })));
     expect(withLimit).toBe('ctx ▕████░░░░░░▏ 38% (300k)');
     expect(usageBarWidth('ctx', 38, '(300k)')).toBe(withLimit.length);
+    const withReset = strip(renderToString(createElement(UsageBar, { label: '5h', percent: 5, reset: '2h 15m' })));
+    expect(withReset).toBe('5h ▕█░░░░░░░░░▏ 5% (2h 15m)');
+    expect(usageBarWidth('5h', 5, undefined, '2h 15m')).toBe(withReset.length);
     expect(bar(90)).toContain('\x1b[31m'); // red from 85%
     expect(bar(70)).toContain('\x1b[33m'); // yellow from 60%
     expect(bar(10)).toContain('\x1b[32m');

@@ -11,6 +11,10 @@ export interface GoUsage {
   fiveHour?: number;
   week?: number;
   month?: number;
+  /** When each window resets (epoch ms), from the server's `resetsAt`. */
+  fiveHourReset?: number;
+  weekReset?: number;
+  monthReset?: number;
 }
 
 interface GoWindow {
@@ -30,6 +34,11 @@ let inflight: Promise<GoUsage | undefined> | undefined;
 const percent = (w: GoWindow | undefined): number | undefined =>
   typeof w?.percent === 'number' && w.percent >= 0 && w.percent <= 100 ? w.percent : undefined;
 
+const resetOf = (w: GoWindow | undefined): number | undefined => {
+  const r = typeof w?.resetsAt === 'string' ? Date.parse(w.resetsAt) : NaN;
+  return Number.isFinite(r) ? r : undefined;
+};
+
 /**
  * The Go server's own usage for `apiKey`, in percent per window; undefined when the endpoint fails or the reply has
  * no usable windows. One fetch is shared per key for TTL ms (a turn start, its end and the idle timer can overlap).
@@ -42,7 +51,14 @@ export async function fetchGoUsage(apiKey: string, fetchFn: typeof fetch = fetch
       const r = await fetchFn(`${BASE_URL}/usage`, { headers: { authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(10_000) });
       if (r.ok) {
         const j = (await r.json()) as GoReply;
-        const u: GoUsage = { fiveHour: percent(j.usage?.rolling), week: percent(j.usage?.weekly), month: percent(j.usage?.monthly) };
+        const u: GoUsage = {
+          fiveHour: percent(j.usage?.rolling),
+          week: percent(j.usage?.weekly),
+          month: percent(j.usage?.monthly),
+          fiveHourReset: resetOf(j.usage?.rolling),
+          weekReset: resetOf(j.usage?.weekly),
+          monthReset: resetOf(j.usage?.monthly),
+        };
         if (u.fiveHour !== undefined || u.week !== undefined || u.month !== undefined) usage = u;
       }
     } catch {

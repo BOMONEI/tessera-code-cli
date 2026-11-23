@@ -48,8 +48,8 @@ export function compactLabel(p: CompactProgress): string {
 
 const BAR_CELLS = 10;
 
-/** A usage gauge for the HUD: "ctx ▕███░░░░░░░▏ 38%", green → yellow (60%) → red (85%). */
-export function UsageBar({ label, percent, suffix }: { label: string; percent: number; suffix?: string }) {
+/** A usage gauge for the HUD: "ctx ▕███░░░░░░░▏ 38% (500k)", green → yellow (60%) → red (85%). */
+export function UsageBar({ label, percent, suffix, reset }: { label: string; percent: number; suffix?: string; reset?: string }) {
   const p = Math.max(0, Math.min(100, Math.round(percent)));
   const filled = Math.min(BAR_CELLS, Math.round((p / 100) * BAR_CELLS)) || (percent > 0 ? 1 : 0); // any use shows a cell
   const color = p >= 85 ? 'red' : p >= 60 ? 'yellow' : 'green';
@@ -62,13 +62,16 @@ export function UsageBar({ label, percent, suffix }: { label: string; percent: n
         {p}%
       </Text>
       {suffix ? <Text dimColor> {suffix}</Text> : null}
+      {reset ? <Text dimColor> ({reset})</Text> : null}
     </Text>
   );
 }
 
 /** Plain-text width of a UsageBar, for layout. */
-export const usageBarWidth = (label: string, percent: number, suffix?: string) =>
-  stringWidth(`${label} ▕${'░'.repeat(BAR_CELLS)}▏ ${Math.max(0, Math.min(100, Math.round(percent)))}%${suffix ? ` ${suffix}` : ''}`);
+export const usageBarWidth = (label: string, percent: number, suffix?: string, reset?: string) =>
+  stringWidth(
+    `${label} ▕${'░'.repeat(BAR_CELLS)}▏ ${Math.max(0, Math.min(100, Math.round(percent)))}%${suffix ? ` ${suffix}` : ''}${reset ? ` (${reset})` : ''}`,
+  );
 
 /** Live timer next to the spinner: whole seconds, then minutes. */
 /** Thinking as ctrl+t cycles it. */
@@ -79,6 +82,15 @@ export function thinkingMode(agent: Pick<Agent, 'thinking' | 'thinkingAuto'>): '
 function elapsedLabel(ms: number): string {
   const s = Math.floor(ms / 1000);
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
+}
+
+/** Time until a spend window resets, compact: 45m, 3h 05m, 2d 04h. */
+function untilLabel(ms: number): string {
+  const m = Math.max(0, Math.round(ms / 60_000));
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ${String(m % 60).padStart(2, '0')}m`;
+  return `${Math.floor(h / 24)}d ${String(h % 24).padStart(2, '0')}h`;
 }
 
 // shift+tab cycle. 'dangerous' (never asks) is left out so it is never reached by accident: /mode, config or flag only.
@@ -971,14 +983,29 @@ export function TuiApp({
   const where = tildePath(core.ctx.cwd);
   // The Go server's own numbers win; the local estimate fills the windows it does not report.
   const local = spend
-    ? { fiveHour: (spend.fiveHour / GO_LIMITS.fiveHour) * 100, week: (spend.week / GO_LIMITS.week) * 100, month: (spend.month / GO_LIMITS.month) * 100 }
+    ? {
+        fiveHour: (spend.fiveHour / GO_LIMITS.fiveHour) * 100,
+        week: (spend.week / GO_LIMITS.week) * 100,
+        month: (spend.month / GO_LIMITS.month) * 100,
+        fiveHourReset: spend.fiveHourReset,
+        weekReset: spend.weekReset,
+      }
     : undefined;
-  const pcts = go || local ? { fiveHour: go?.fiveHour ?? local?.fiveHour, week: go?.week ?? local?.week, month: go?.month ?? local?.month } : undefined;
-  const bars: Array<{ label: string; percent: number }> = [];
+  const pcts = go || local
+    ? {
+        fiveHour: go?.fiveHour ?? local?.fiveHour,
+        week: go?.week ?? local?.week,
+        month: go?.month ?? local?.month,
+        fiveHourReset: go?.fiveHourReset ?? local?.fiveHourReset,
+        weekReset: go?.weekReset ?? local?.weekReset,
+        monthReset: go?.monthReset,
+      }
+    : undefined;
+  const bars: Array<{ label: string; percent: number; reset?: string }> = [];
   if (pcts) {
-    if (pcts.fiveHour !== undefined) bars.push({ label: '5h', percent: pcts.fiveHour });
-    if (pcts.week !== undefined) bars.push({ label: 'wk', percent: pcts.week });
-    if (pcts.month !== undefined) bars.push({ label: 'mo', percent: pcts.month });
+    if (pcts.fiveHour !== undefined) bars.push({ label: '5h', percent: pcts.fiveHour, reset: pcts.fiveHourReset !== undefined ? untilLabel(pcts.fiveHourReset - Date.now()) : undefined });
+    if (pcts.week !== undefined) bars.push({ label: 'wk', percent: pcts.week, reset: pcts.weekReset !== undefined ? untilLabel(pcts.weekReset - Date.now()) : undefined });
+    if (pcts.month !== undefined) bars.push({ label: 'mo', percent: pcts.month, reset: pcts.monthReset !== undefined ? untilLabel(pcts.monthReset - Date.now()) : undefined });
   }
   // Gauges only: the session's own spend is in /cost; the details of both are in /context and /cost.
   const ctxLimit = `(${formatTokens(agent.contextLimit)})`;
@@ -1312,7 +1339,7 @@ export function TuiApp({
             {bars.map((b, i) => (
               <Fragment key={b.label}>
                 {i > 0 ? '  ' : ''}
-                <UsageBar label={b.label} percent={b.percent} />
+                <UsageBar label={b.label} percent={b.percent} reset={b.reset} />
               </Fragment>
             ))}
           </Text>
