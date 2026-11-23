@@ -491,17 +491,22 @@ export function TuiApp({
 
   useEffect(() => {
     // Compaction (auto or /compact) reports an estimated percentage; it replaces the spinner label meanwhile.
-    // Each subagent gets its own line (several run at once in multi-agent mode); a finished one stays until the
-    // turn's end shows its report is ready — background ones keep their line even after the turn ended.
-    core.onTaskProgress = (p) =>
+    // Each subagent gets its own line (several run at once in multi-agent mode). A finished one lingers briefly —
+    // 5s when its report is ready, 30s on a failure or interrupt (claude-code keeps failures visible longer) — and
+    // background ones keep their line even after the turn ended.
+    core.onTaskProgress = (p) => {
+      if (p.state === 'done') {
+        const delay = p.activity.includes('finished') ? 5_000 : 30_000;
+        setTimeout(() => setSubagents((list) => list.filter((s) => s.id !== p.id)), delay).unref?.();
+      }
       setSubagents((list) => {
         const i = list.findIndex((s) => s.id === p.id);
-        if (i < 0) return [...list, { ...p, since: Date.now() }];
         if (i < 0) return [...list, { ...p, since: Date.now() }];
         const next = [...list];
         next[i] = { ...next[i]!, ...p, since: next[i]!.state === 'queued' && p.state === 'running' ? Date.now() : next[i]!.since };
         return next;
       });
+    };
     agent.onCompactProgress = (p) => setStatus(p.phase === 'done' ? (turnRef.current ? 'Thinking' : undefined) : compactLabel(p));
     bridge.ask = (req) => new Promise<Decision>((resolve) => setPending({ req, resolve }));
     bridge.onDiff = (path, diff) => pendingDiffs.current.push({ path, diff });

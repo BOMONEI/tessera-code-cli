@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.12 — 2026-11-20
+
+### Fixed
+- A finished subagent's line in the panel lingered until the turn ended. It now leaves after 5s (report ready) or
+  30s (failed or interrupted, so the cause stays readable). The report itself still arrives with the next prompt.
+
 ## 0.7.11 — 2026-11-20
 
 ### Added
