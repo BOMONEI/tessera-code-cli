@@ -329,7 +329,13 @@ export function TuiApp({
   const [, tick] = useState(0);
   useEffect(() => {
     if (busySince === undefined) return;
-    const timer = setInterval(() => tick((n) => n + 1), 1000);
+    const timer = setInterval(() => {
+      tick((n) => n + 1);
+      // Running tool lines blink: bump their revision so the transcript redraws them (other lines stay cached).
+      setItems((prev) =>
+        prev.some((it) => it.kind === 'tool' && it.running) ? prev.map((it) => (it.kind === 'tool' && it.running ? { ...it, rev: (it.rev ?? 0) + 1 } : it)) : prev,
+      );
+    }, 1000);
     return () => clearInterval(timer);
   }, [busySince]);
   const [busy, setBusy] = useState(false);
@@ -485,6 +491,8 @@ export function TuiApp({
   const streamRef = useRef('');
   // Diffs arrive from inside tool execution; show them right after the tool line.
   const pendingDiffs = useRef<Array<{ path: string; diff: string }>>([]);
+  /** Tool calls already drawn as running lines (stream event id → history item id): their results fill them in. */
+  const runningToolItems = useRef(new Map<string, number>());
 
   const push = useCallback((item: NewHistoryItem) => {
     const id = nextId++;
@@ -524,6 +532,22 @@ export function TuiApp({
             else {
               next = [...next];
               next[i] = { ...next[i]!, ...p, since: next[i]!.state === 'queued' && p.state === 'running' ? Date.now() : next[i]!.since };
+            }
+          }
+          return next;
+        });
+        // The same progress also draws a live line in the conversation (claude-code style): the task with its
+        // current tool call, updating in place, and a ✔ when it finishes.
+        setItems((prev) => {
+          let next = prev;
+          for (const p of latest.values()) {
+            const i = next.findIndex((it) => it.kind === 'task' && it.taskId === p.id);
+            if (i < 0) {
+              next = [...next, { kind: 'task', taskId: p.id, type: p.type, description: p.description, state: p.state, activity: p.activity, since: Date.now(), rev: 0 } as HistoryItem];
+            } else if (next[i]!.kind === 'task') {
+              const it = next[i] as Extract<HistoryItem, { kind: 'task' }>;
+              next = [...next];
+              next[i] = { ...it, state: p.state, activity: p.activity, rev: it.rev + 1, ...(p.state === 'done' && it.state !== 'done' ? { endedAt: Date.now() } : {}) };
             }
           }
           return next;
@@ -657,17 +681,30 @@ export function TuiApp({
               // The answer so far is done but the turn is not: the next request (often seconds) follows.
               setStatus('Thinking');
               break;
-            case 'tool-call':
+            case 'tool-call': {
               flushReasoning();
               flushStream();
               labels.set(ev.id, { label: toolLabel(ev.name, ev.input), fullLabel: toolLabelFull(ev.name, ev.input) });
+              // The tool line goes into the conversation right away with a blinking dot; the result fills it in later.
+              const itemId = push({ kind: 'tool', ...labels.get(ev.id), running: true, rev: 0 } as NewHistoryItem);
+              runningToolItems.current.set(ev.id, itemId);
               setStatus(`Running ${toolLabel(ev.name, ev.input)}`);
               break;
-            case 'tool-result':
-              push({ kind: 'tool', label: ev.name, ...labels.get(ev.id), output: outputText(ev.output), isError: ev.isError });
+            }
+            case 'tool-result': {
+              const itemId = runningToolItems.current.get(ev.id);
+              runningToolItems.current.delete(ev.id);
+              if (itemId === undefined) push({ kind: 'tool', label: ev.name, ...labels.get(ev.id), output: outputText(ev.output), isError: ev.isError });
+              else
+                setItems((prev) =>
+                  prev.map((it) =>
+                    it.id === itemId && it.kind === 'tool' ? { ...it, output: outputText(ev.output), isError: ev.isError, running: false, rev: (it.rev ?? 0) + 1 } : it,
+                  ),
+                );
               for (const d of pendingDiffs.current.splice(0)) push({ kind: 'diff', ...d });
               setStatus('Thinking');
               break;
+            }
             case 'info':
               push({ kind: 'info', text: ev.text });
               break;
@@ -714,6 +751,10 @@ export function TuiApp({
         flushReasoning();
         flushStream(); // no-op normally; keeps leftovers out of the next turn if the run threw
         turnRef.current = false;
+        // A turn that ended without the tool results: the running lines stop blinking and note it.
+        setItems((prev) =>
+          prev.map((it) => (it.kind === 'tool' && it.running ? { ...it, running: false, output: '(interrupted)', isError: true, rev: (it.rev ?? 0) + 1 } : it)),
+        );
         // Messages the turn ended without reading (it was already writing its answer) run next.
         const unread = core.agent.takeInterjections();
         setInterjecting([]);

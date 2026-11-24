@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.15 — 2026-11-20
+
+### Added
+- A running tool call is drawn into the conversation as soon as it starts (claude-code style): the dot blinks while
+  it executes, and the result fills the same line in place when it arrives — so you can see what the agent is doing
+  without waiting for the tool to finish. A turn that ends without the results fixes those lines as (interrupted).
+
 ## 0.7.14 — 2026-11-20
 
 ### Added

@@ -13,14 +13,17 @@ export type HistoryItem =
   | { id: number; kind: 'assistant'; markdown: string }
   /**
    * `output`: the full result, shown with ctrl+o (expanded view); otherwise the first `lines` lines. `fullLabel`: the
-   * call with its argument uncut (a long or multi-line command), shown instead of `label` when expanded.
+   * call with its argument uncut (a long or multi-line command), shown instead of `label` when expanded. `running`:
+   * the call is still executing — the dot blinks (bump `rev` per blink) and no result is shown yet.
    */
-  | { id: number; kind: 'tool'; label: string; fullLabel?: string; preview?: string; output?: string; lines?: number; isError?: boolean }
+  | { id: number; kind: 'tool'; label: string; fullLabel?: string; preview?: string; output?: string; lines?: number; isError?: boolean; running?: boolean; rev?: number }
   /** First run after an update: one line when collapsed, the release notes in the expanded view (ctrl+o). */
   | { id: number; kind: 'changelog'; version: string; from: string; count: number; markdown: string }
   /** The model's thinking: one line when collapsed, the full text in the expanded view. */
   | { id: number; kind: 'reasoning'; text: string; ms?: number }
   | { id: number; kind: 'diff'; path: string; diff: string; maxLines?: number }
+  /** A live subagent line: its state and current tool call update in place (bump `rev` so the cache redraws). */
+  | { id: number; kind: 'task'; taskId: string; type: string; description: string; state: 'queued' | 'running' | 'done'; activity: string; since: number; endedAt?: number; rev: number }
   | { id: number; kind: 'info'; text: string }
   | { id: number; kind: 'error'; text: string };
 
@@ -149,13 +152,34 @@ export function HistoryView({
       return (
         <Box flexDirection="column" marginTop={1}>
           <Text>
-            <Text color={item.isError ? 'red' : 'cyan'}>● </Text>
+            <Text color={item.isError ? 'red' : 'cyan'}>{item.running ? ((item.rev ?? 0) % 2 ? '○ ' : '● ') : '● '}</Text>
             <Text bold>{label}</Text>
             {more || item.fullLabel ? foldHint : null}
             {item.fullLabel && !more && !expanded ? <Text dimColor italic> ({expandHint})</Text> : null}
           </Text>
           {shown ? <Text dimColor>{shown.replace(/^/gm, '  ⎿ ')}</Text> : null}
           {more && !expanded ? <Text dimColor italic>    ({expandHint})</Text> : null}
+        </Box>
+      );
+    }
+    case 'task': {
+      const seconds = Math.max(1, Math.round(((item.endedAt ?? Date.now()) - item.since) / 1000));
+      const elapsed = item.state === 'running' ? ` ${seconds}s` : ` in ${seconds}s`;
+      const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…` : s);
+      return (
+        <Box marginTop={1}>
+          <Text wrap="truncate">
+            <Text color={item.state === 'done' ? 'green' : 'cyan'}>{item.state === 'done' ? '✔ ' : '◷ '}</Text>
+            <Text color={item.state === 'queued' ? undefined : 'cyan'} dimColor={item.state === 'queued'}>
+              {item.type}
+            </Text>
+            <Text> {cut(item.description, 44)}</Text>
+            <Text dimColor>
+              {'  › '}
+              {item.activity}
+              {elapsed}
+            </Text>
+          </Text>
         </Box>
       );
     }

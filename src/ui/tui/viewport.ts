@@ -36,7 +36,10 @@ function itemLines(item: HistoryItem, opts: TranscriptOptions): string[] {
   }
   const expanded = opts.isExpanded(item);
   // Answers drawn before the markdown renderer loaded (raw text) are drawn again once it has.
-  const key = `${item.id}:${expanded ? 1 : 0}:${opts.showThinking ? 1 : 0}:${markdown() ? 1 : 0}`;
+  // A live item (a task, or a running tool call) changes in place: its rev is part of the key, so updates redraw
+  // (immuable kinds are cached once).
+  const rev = item.kind === 'task' ? item.rev : item.kind === 'tool' && item.running ? (item.rev ?? 0) : 0;
+  const key = `${item.id}:${expanded ? 1 : 0}:${opts.showThinking ? 1 : 0}:${markdown() ? 1 : 0}:${rev}`;
   let lines = cache.get(key);
   if (!lines) {
     const text = renderToString(createElement(HistoryView, { item, width: opts.width, expanded, showThinking: opts.showThinking, clickable: true }), { columns: opts.width });

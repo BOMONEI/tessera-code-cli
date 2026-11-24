@@ -136,6 +136,42 @@ describe('UsageBar', () => {
     expect(bar(70)).toContain('\x1b[33m'); // yellow from 60%
     expect(bar(10)).toContain('\x1b[32m');
   });
+
+  it('draws a live subagent line in the conversation: running with its tool call, then finished', async () => {
+    const { HistoryView } = await import('../src/ui/tui/components.js');
+    const { renderToString } = await import('ink');
+    const running = strip(
+      renderToString(
+        createElement(HistoryView, {
+          item: { id: 1, kind: 'task', taskId: 't1', type: 'explore', description: 'study refunds', state: 'running', activity: 'bash(npm test)', since: Date.now() - 8_000, rev: 3 },
+          width: 100,
+        }),
+      ),
+    );
+    expect(running).toContain('◷ explore study refunds');
+    expect(running).toContain('bash(npm test)');
+    expect(running).toContain('8s');
+    const done = strip(
+      renderToString(
+        createElement(HistoryView, {
+          item: { id: 2, kind: 'task', taskId: 't1', type: 'explore', description: 'study refunds', state: 'done', activity: 'finished — report ready', since: Date.now() - 8_000, endedAt: Date.now(), rev: 4 },
+          width: 100,
+        }),
+      ),
+    );
+    expect(done).toContain('✔ explore study refunds');
+    expect(done).toContain('finished — report ready');
+  });
+
+  it('a running tool call shows a blinking line with no result yet', async () => {
+    const { HistoryView } = await import('../src/ui/tui/components.js');
+    const { renderToString } = await import('ink');
+    const run = strip(renderToString(createElement(HistoryView, { item: { id: 3, kind: 'tool', label: 'bash(npm test)', running: true, rev: 1 }, width: 80 })));
+    expect(run).toContain('bash(npm test)');
+    expect(run).not.toContain('⎿'); // no result while it is running
+    const done = strip(renderToString(createElement(HistoryView, { item: { id: 4, kind: 'tool', label: 'bash(npm test)', output: 'ok', isError: false }, width: 80 })));
+    expect(done).toContain('⎿ ok');
+  });
 });
 
 describe('/command', () => {
