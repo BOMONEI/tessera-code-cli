@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.17 — 2026-11-20
+
+### Changed
+- `/model`, `/mode` and `/think` with enter open the selectbox now (like `/resume`), instead of just printing — pick
+  from the same candidates tab completion shows. `/resume` and `/agents` keep their own pickers.
+
+### Added
+- ctrl+s in a picker applies the choice and also saves it as the default for new sessions: `/model` saves the model,
+  `/think` saves the thinking mode (`thinking`, `thinkingAuto`, `thinkingLevel`) in `~/.tessera-code/config.json`.
+  Enter stays session-only. The picker shows the hint: "enter apply · ctrl+s also save as the default · esc cancel".
+
 ## 0.7.16 — 2026-11-20
 
 ### Changed

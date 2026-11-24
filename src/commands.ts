@@ -45,14 +45,17 @@ export interface CommandResult {
 export interface Choice {
   title: string;
   options: Array<{ label: string; hint?: string }>;
-  select(index: number): Promise<CommandResult>;
+  /** `save` (ctrl+s) additionally stores the choice as the default for new sessions, for commands that support it. */
+  select(index: number, save?: boolean): Promise<CommandResult>;
+  /** The picker offers ctrl+s (save as the default for new sessions). */
+  canSave?: boolean;
 }
 
 export interface SlashCommand {
   name: string;
   description: string;
   argHint?: string;
-  run(app: App, arg: string): Promise<CommandResult>;
+  run(app: App, arg: string, save?: boolean): Promise<CommandResult>;
   /** Argument candidates for completion menus. */
   suggest?(app: App): Promise<Array<{ value: string; hint?: string }>>;
 }
@@ -346,7 +349,7 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
     name: 'model',
     description: 'show or switch the model (OpenCode Go, or <provider>/<model> of a connected provider)',
     argHint: '[id]',
-    async run(app, arg) {
+    async run(app, arg, save) {
       const zdrNote = (m: ModelInfo) => (modelIsZdr(m) ? '' : `\n⚠ ${nonZdrWarning(m)}`);
       if (!arg) return { output: `${app.agent.model.id} (${app.agent.model.format})${zdrNote(app.agent.model)}` };
       const models = await pickableModels(app);
@@ -358,7 +361,10 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
         return { output: `Unknown model "${arg}". See /models.` };
       }
       await app.setModel(arg);
-      return { output: `Model set to ${app.agent.model.id} (${app.agent.model.format})${zdrNote(app.agent.model)}` };
+      if (save) await saveGlobalSetting('model', arg); // new sessions start with this model too
+      return {
+        output: `Model set to ${app.agent.model.id} (${app.agent.model.format})${zdrNote(app.agent.model)}${save ? ' — saved as the default for new sessions.' : ''}`,
+      };
     },
     async suggest(app) {
       return (await pickableModels(app)).map((m) => ({
@@ -479,7 +485,7 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
     name: 'think',
     description: 'reasoning: on | auto | off | low | medium | high (auto low|medium|high: the most it may think); show | hide its text',
     argHint: '[on|auto|off|low|medium|high|show|hide]',
-    async run(app, arg) {
+    async run(app, arg, save) {
       const { agent } = app;
       if (arg === 'show' || arg === 'hide') {
         app.config.showThinking = arg === 'show';
@@ -499,7 +505,14 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
         agent.thinking = true;
         agent.thinkingAuto = switchTo === 'auto';
       } else agent.thinking = !agent.thinking;
-      if (!agent.thinking) return { output: 'Thinking off — faster, best for simple edits' };
+      if (save) {
+        await saveGlobalSetting('thinking', agent.thinking); // new sessions start in this mode too
+        if (agent.thinking) {
+          await saveGlobalSetting('thinkingAuto', agent.thinkingAuto);
+          await saveGlobalSetting('thinkingLevel', agent.thinkingLevel);
+        }
+      }
+      if (!agent.thinking) return { output: `Thinking off — faster, best for simple edits${save ? ' — saved as the default for new sessions.' : ''}` };
       return {
         output: agent.thinkingAuto
           ? `Thinking auto, at most ${agent.thinkingLevel} — each prompt gets what it needs: none for questions and confirmations, more for real work`
@@ -785,9 +798,29 @@ export async function loadCommands(cwd: string, skills: Skill[] = []): Promise<S
   return [...byName.values()];
 }
 
+/** Bare commands whose own no-argument behavior stays: /resume and /agents already open their own picker. */
+const BARE_HAS_BEHAVIOR = new Set(['resume', 'agents']);
+/** Commands whose picker select honors the ctrl+s "save as the default" flag. */
+const SAVABLE = new Set(['model', 'think']);
+
 export async function runCommand(app: App, line: string): Promise<CommandResult> {
   const [name = '', ...rest] = line.slice(1).split(/\s+/);
   const cmd = (await loadCommands(app.ctx.cwd, await app.listSkills())).find((c) => c.name === name);
   if (!cmd) return { output: `Unknown command /${name}. Try /help.` };
-  return cmd.run(app, rest.join(' ').trim());
+  const arg = rest.join(' ').trim();
+  // "/mode" + enter opens the same selectbox tab completion shows (like /resume does), instead of just printing.
+  if (!arg && cmd.argHint && cmd.suggest && !BARE_HAS_BEHAVIOR.has(name)) {
+    const options = await cmd.suggest(app);
+    if (options.length) {
+      return {
+        choose: {
+          title: `/${name} ${cmd.argHint}`,
+          options: options.map((o) => ({ label: o.value, hint: o.hint })),
+          select: (i, save) => cmd.run(app, options[i]!.value, save),
+          canSave: SAVABLE.has(name),
+        },
+      };
+    }
+  }
+  return cmd.run(app, arg);
 }

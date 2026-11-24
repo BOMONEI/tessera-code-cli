@@ -1264,11 +1264,12 @@ export function TuiApp({
           <Picker
             title={choice.title}
             options={choice.options}
+            saveHint={choice.canSave}
             onCancel={() => {
               setChoice(undefined);
               void drain();
             }}
-            onSelect={(i) => {
+            onSelect={(i, save) => {
               const current = choice;
               setChoice(undefined);
               // Busy until the selection is applied: a prompt sent meanwhile is queued, not run alongside it.
@@ -1276,7 +1277,7 @@ export function TuiApp({
               setBusy(true);
               void (async () => {
                 try {
-                  const r = await current.select(i);
+                  const r = await current.select(i, save);
                   busyRef.current = false;
                   setBusy(false);
                   await applyResult(r);

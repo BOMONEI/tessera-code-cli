@@ -363,12 +363,15 @@ export function Picker({
   onSelect,
   onCancel,
   height = 10,
+  saveHint,
 }: {
   title: string;
   options: Array<{ label: string; hint?: string }>;
-  onSelect: (index: number) => void;
+  onSelect: (index: number, save?: boolean) => void;
   onCancel: () => void;
   height?: number;
+  /** When set, ctrl+s applies the choice and also stores it as the default for new sessions. */
+  saveHint?: boolean;
 }) {
   const [index, setIndex] = useState(0);
   useInput((input, key) => {
@@ -378,6 +381,7 @@ export function Picker({
     else if (key.pageUp) setIndex((i) => Math.max(0, i - height));
     else if (key.pageDown) setIndex((i) => Math.min(options.length - 1, i + height));
     else if (key.return) onSelect(index);
+    else if (key.ctrl && input === 's') onSelect(index, true);
     else if (/^[1-9]$/.test(input) && Number(input) <= options.length) onSelect(Number(input) - 1);
   });
   const start = Math.min(Math.max(0, index - Math.floor(height / 2)), Math.max(0, options.length - height));
@@ -403,7 +407,7 @@ export function Picker({
         );
       })}
       {start + height < options.length ? <Text dimColor>  ↓ {options.length - start - height} more</Text> : null}
-      <Text dimColor>↑↓ select · enter confirm · esc cancel</Text>
+      <Text dimColor>{saveHint ? '↑↓ select · enter apply · ctrl+s also save as the default · esc cancel' : '↑↓ select · enter confirm · esc cancel'}</Text>
     </Box>
   );
 }
