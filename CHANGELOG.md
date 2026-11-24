@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.7.19 — 2026-11-20
+
+### Changed
+- With subagents on, delegating is the default, not the fallback: the orchestrator is told to hand out anything
+  past one or two tool calls in its first response — research, search, every multi-step job — and to send several
+  independent jobs together. Working a multi-step job alone is named as the failure mode.
+
+### Added
+- Markdown emphasis colors in the answers, Codex-like: headings in the app's cyan, links bright blue and
+  underlined, dim rules. Light backgrounds (`COLORFGBG`, best effort) get darker shades of the same hues so the
+  colors do not wash out on white.
+
 ## 0.7.18 — 2026-11-20
 
 ### Added

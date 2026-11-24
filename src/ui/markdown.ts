@@ -7,6 +7,38 @@ import { supportsLanguage } from 'cli-highlight';
 
 const MIN_COL = 6;
 
+/** Best-effort light-background detection: the COLORFGBG env ("fg;bg", e.g. "0;15") is set by xterm-like
+ *  terminals and some others. Unknown or unset counts as dark (the common case). */
+export function lightBackground(env: Record<string, string | undefined> = process.env): boolean {
+  const bg = env.COLORFGBG?.split(';').pop();
+  const n = Number(bg);
+  return bg !== undefined && Number.isFinite(n) && n >= 7; // 7+ are the light/white-ish backgrounds
+}
+
+/** Markdown emphasis colors. Dark backgrounds get bright accents; light ones darker shades of the same hues
+ *  (cyan/blue/yellow on white would wash out). */
+const mdTheme = lightBackground()
+  ? {
+      firstHeading: chalk.hex('#0e7490').bold,
+      heading: chalk.hex('#0e7490').bold,
+      link: chalk.hex('#1d4ed8'),
+      href: chalk.hex('#1d4ed8').underline,
+      code: chalk.hex('#a16207'),
+      codespan: chalk.hex('#a16207'),
+      blockquote: chalk.hex('#475569').italic,
+      hr: chalk.gray,
+    }
+  : {
+      firstHeading: chalk.cyan.bold,
+      heading: chalk.cyan.bold,
+      link: chalk.blueBright,
+      href: chalk.blueBright.underline,
+      code: chalk.yellow,
+      codespan: chalk.yellow,
+      blockquote: chalk.gray.italic,
+      hr: chalk.dim,
+    };
+
 
 function terminalWidth(): number {
   return Math.max(40, (process.stdout.columns || 80) - 1);
@@ -15,7 +47,8 @@ function terminalWidth(): number {
 function createMarked(width: () => number): Marked {
   const marked = new Marked();
   // marked-terminal's typings lag behind marked's extension type.
-  marked.use(markedTerminal({ reflowText: false, tab: 2 }) as Parameters<typeof marked.use>[0]);
+  // Codex-like accents: the app's cyan for headings, bright blue links; the palette adapts to the terminal.
+  marked.use(markedTerminal({ reflowText: false, tab: 2, ...mdTheme }) as Parameters<typeof marked.use>[0]);
   // marked-terminal's cli-table3 tables never shrink: long cells make rows wider than the terminal, which then
   // hard-wraps every border line. Render tables ourselves, fitted to the width, wrapping text inside cells.
   // marked-terminal prints a list item's text without rendering its inline markup (`code`, **bold**, links show

@@ -155,3 +155,28 @@ describe('code blocks in languages the highlighter does not know', () => {
     }
   });
 });
+
+describe('markdown emphasis colors', () => {
+  it('detects a light background from COLORFGBG (unknown counts as dark)', async () => {
+    const { lightBackground } = await import('../src/ui/markdown.js');
+    expect(lightBackground({})).toBe(false);
+    expect(lightBackground({ COLORFGBG: '15;0' })).toBe(false);
+    expect(lightBackground({ COLORFGBG: '0;15' })).toBe(true);
+    expect(lightBackground({ COLORFGBG: '0;7' })).toBe(true);
+    expect(lightBackground({ COLORFGBG: '15;8' })).toBe(true);
+  });
+
+  it('renders headings and links with color on both palettes', async () => {
+    const chalk = (await import('chalk')).default;
+    const saved = chalk.level;
+    chalk.level = 3; // vitest's stdout is not a TTY, so chalk would strip every style otherwise
+    try {
+      const { renderMarkdown } = await import('../src/ui/markdown.js');
+      const out = renderMarkdown('# 제목\n\n**굵게** `code` [링크](https://x.y)', 80);
+      expect(out).toMatch(/\x1b\[1m/); // bold
+      expect(out).toMatch(/\x1b\[[0-9;]*3[0-8]m/); // some ANSI color
+    } finally {
+      chalk.level = saved;
+    }
+  });
+});

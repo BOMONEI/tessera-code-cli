@@ -164,8 +164,8 @@ describe('system prompt', () => {
   it('casts the agent as the orchestrator when subagents are on, and never discourages delegating', () => {
     for (const section of [agentsSection(1), agentsSection(4)]) {
       expect(section).toContain('you are the orchestrator');
-      expect(section).toContain('Delegate before you work');
-      expect(section).toContain('apply to small jobs only');
+      expect(section).toContain('Delegate aggressively and early');
+      expect(section).toContain('is the failure mode');
       expect(section).not.toContain('Do small tasks yourself');
     }
     expect(agentsSection(4)).toContain('run in parallel (up to 4 at a time)');
