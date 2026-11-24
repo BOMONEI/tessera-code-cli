@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.7.16 — 2026-11-20
+
+### Changed
+- Compaction is claude-code style now: the last ~25% of the history stays verbatim (it always starts at a user
+  message, so a tool call is never cut from its result) and only the older part is summarized. Before any summary,
+  a free LLM-less pass clears the tool results of older turns (the most recent three stay intact) — often enough
+  that no summary is needed. After a compaction, the current heads of recently edited files (up to 5) are
+  re-injected, so the model does not spend round trips re-reading what it just wrote.
+
+### Added
+- The update check now runs hourly while a session is open (one HEAD request per hour, no API rate limit), not only
+  at startup. The info line appears once per version; the bottom bar keeps showing the notice.
+
 ## 0.7.15 — 2026-11-20
 
 ### Added

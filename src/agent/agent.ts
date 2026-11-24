@@ -5,7 +5,7 @@ import { withFallback, type FallbackState } from '../providers/fallback.js';
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import { recordSpend } from '../cost/ledger.js';
 import { OPENCODE_GO, splitModelId } from '../providers/registry.js';
-import { summarize, compactedHistory, type CompactProgress } from './compact.js';
+import { pruneToolResults, splitForCompaction, summarize, compactedHistory, textTokens, estimateMessagesTokens, type CompactProgress } from './compact.js';
 import type { ThinkingLevel } from '../config.js';
 import { autoLevel, type AutoLevel } from './effort.js';
 
@@ -55,6 +55,8 @@ export interface AgentOptions {
   fallback?: { models: ModelInfo[]; firstTokenTimeoutMs: number; stickyMs: number };
   /** Context window cap: history is compacted automatically before a request would exceed it. */
   contextLimit: number;
+  /** Current heads of recently edited files; after a compaction they are re-injected (claude-code restores them). */
+  recentFiles?: () => Promise<Array<{ path: string; content: string }>>;
   messages?: ModelMessage[];
   /** UserPromptSubmit hook: may block the prompt or add context to it. */
   beforeTurn?: (prompt: string) => Promise<{ blocked?: string; context?: string; notes?: string[] }>;
@@ -390,14 +392,35 @@ export class Agent {
     return windows.length ? Math.max(this.contextLimit, Math.floor(Math.min(...windows) * 0.9)) : this.contextLimit;
   }
 
-  /** Replaces history with a model-written summary. Returns the summary. */
+  /** Replaces history with a model-written summary of the older part; a recent tail (kept verbatim) and the
+   *  current heads of recently edited files follow it (claude-code restores what it compacted away). Returns the
+   *  summary. */
   async compact(focus?: string, abortSignal?: AbortSignal): Promise<string> {
     if (this.messages.length === 0) throw new Error('Nothing to compact.');
-    const r = await summarize({ model: this.model, apiKey: this.opts.apiKey, sessionId: this.opts.sessionId, messages: this.messages, focus, abortSignal, onProgress: this.onCompactProgress });
+    const [toCompress, tail] = splitForCompaction(this.messages);
+    const r = await summarize({
+      model: this.model,
+      apiKey: this.opts.apiKey,
+      sessionId: this.opts.sessionId,
+      messages: toCompress.length ? toCompress : this.messages,
+      focus,
+      abortSignal,
+      onProgress: this.onCompactProgress,
+    });
     const u = toUsage(this.model, { inputTokens: r.inputTokens, outputTokens: r.outputTokens } as LanguageModelUsage);
     this.addUsage(this.total, u);
     this.spend(u.cost);
-    this.replaceHistory(compactedHistory(r.summary));
+    const history = [...compactedHistory(r.summary), ...(toCompress.length ? tail : [])];
+    const files = this.opts.recentFiles ? await this.opts.recentFiles() : [];
+    if (files.length) {
+      history.push({
+        role: 'user',
+        content: `Current contents of the files you recently edited (verbatim, may be truncated):\n\n${files
+          .map((f) => `<file path="${f.path}">\n${f.content}\n</file>`)
+          .join('\n\n')}`,
+      });
+    }
+    this.replaceHistory(history);
     return r.summary;
   }
 
@@ -413,11 +436,20 @@ export class Agent {
     const incoming = (typeof input === 'string' ? textTokens(input) : estimateTokens(input)) + images.length * IMAGE_TOKENS;
     if (this.messages.length && this.contextTokens + incoming >= this.contextLimit) {
       const before = this.contextTokens;
-      try {
-        const summary = await this.compact(undefined, signal);
-        yield { type: 'compacted', before, summary };
-      } catch (e) {
-        yield { type: 'error', message: `Auto-compaction failed: ${errorMessage(e)}` };
+      // The free pass first (claude-code's microcompact): clear old tool results — often enough without a summary.
+      const pruned = pruneToolResults(this.messages);
+      if (pruned) {
+        this.replaceHistory(pruned);
+        this.contextTokens = estimateTokens(pruned);
+        yield { type: 'info', text: 'older tool results cleared to save context' };
+      }
+      if (this.contextTokens + incoming >= this.contextLimit) {
+        try {
+          const summary = await this.compact(undefined, signal);
+          yield { type: 'compacted', before, summary };
+        } catch (e) {
+          yield { type: 'error', message: `Auto-compaction failed: ${errorMessage(e)}` };
+        }
       }
     }
     // Picked on the prompt as typed (before hook context); a resent history (no prompt) thinks at the level.
@@ -510,15 +542,37 @@ export class Agent {
           // Over contextLimit the turn goes on (it compacts after finishing); only the model's real window forces it now.
           if (last && estimate >= this.hardContextLimit && !compactionFailed) {
             try {
-              const r = await summarize({ model: this.model, apiKey: this.opts.apiKey, sessionId: this.opts.sessionId, messages, abortSignal: signal, onProgress: this.onCompactProgress });
-              const u = toUsage(this.model, { inputTokens: r.inputTokens, outputTokens: r.outputTokens } as LanguageModelUsage);
-              this.addUsage(turn, u);
-              this.addUsage(this.total, u);
-              this.spend(u.cost);
-              history = [...compactedHistory(r.summary), { role: 'user', content: CONTINUE_AFTER_COMPACTION }];
+              // The free pass first (claude-code's microcompact); when the context still does not fit, summarize
+              // the older part and keep a verbatim tail.
+              let rebuilt = messages;
+              const pruned = pruneToolResults(messages);
+              if (pruned) {
+                messages = pruned;
+                rebuilt = pruned;
+                notices.push({ type: 'info', text: 'older tool results cleared to save context' });
+              }
+              if (!pruned || estimateMessagesTokens(messages) >= this.hardContextLimit) {
+                const [toCompress, tail] = splitForCompaction(messages);
+                const r = await summarize({
+                  model: this.model,
+                  apiKey: this.opts.apiKey,
+                  sessionId: this.opts.sessionId,
+                  messages: toCompress.length ? toCompress : messages,
+                  abortSignal: signal,
+                  onProgress: this.onCompactProgress,
+                });
+                const u = toUsage(this.model, { inputTokens: r.inputTokens, outputTokens: r.outputTokens } as LanguageModelUsage);
+                this.addUsage(turn, u);
+                this.addUsage(this.total, u);
+                this.spend(u.cost);
+                rebuilt = toCompress.length
+                  ? [...compactedHistory(r.summary), ...tail]
+                  : [...compactedHistory(r.summary), { role: 'user', content: CONTINUE_AFTER_COMPACTION }];
+                notices.push({ type: 'compacted', before: estimate, summary: r.summary });
+              }
+              history = rebuilt;
               completed = [];
               this.replaceHistory(history);
-              notices.push({ type: 'compacted', before: estimate, summary: r.summary });
               next = history;
             } catch (e) {
               if (signal?.aborted) throw e;
@@ -538,11 +592,20 @@ export class Agent {
           afterInterrupt = false;
           if (texts.length) parts.push({ type: 'text', text: `${INTERJECTION_PREFIX}\n${texts.join('\n\n')}` });
           if (parts.length) {
-            if (next) {
-              // Just compacted: the history ends with the "continue" user message; fold these into it rather than
-              // sending two user messages in a row.
+            const lastNext = next?.at(-1);
+            const onContinue = lastNext !== undefined && lastNext.role === 'user' && lastNext.content === CONTINUE_AFTER_COMPACTION;
+            if (next && onContinue) {
+              // Just compacted without a tail: the history ends with the "continue" user message; fold these into it
+              // rather than sending two user messages in a row.
               const merged: ModelMessage = { role: 'user', content: [{ type: 'text', text: CONTINUE_AFTER_COMPACTION }, ...parts] };
               next = [...next.slice(0, -1), merged];
+              history = next;
+              this.replaceHistory(history);
+            } else if (next) {
+              // Compacted with a verbatim tail: it ends like normal conversation, so the message just appends.
+              const message: ModelMessage = { role: 'user', content: parts.length === 1 && parts[0]!.type === 'text' ? parts[0]!.text : parts };
+              completed.push(message);
+              next = [...next, message];
               history = next;
               this.replaceHistory(history);
             } else {
@@ -686,11 +749,19 @@ export class Agent {
       // making the next prompt wait for it.
       if (this.contextTokens >= this.contextLimit && !signal?.aborted) {
         const before = this.contextTokens;
-        try {
-          const summary = await this.compact(undefined, signal);
-          yield { type: 'compacted', before, summary };
-        } catch (e) {
-          if (!signal?.aborted) yield { type: 'error', message: `Auto-compaction failed: ${errorMessage(e)}` };
+        const pruned = pruneToolResults(this.messages);
+        if (pruned) {
+          this.replaceHistory(pruned);
+          this.contextTokens = estimateTokens(pruned);
+          yield { type: 'info', text: 'older tool results cleared to save context' };
+        }
+        if (this.contextTokens >= this.contextLimit) {
+          try {
+            const summary = await this.compact(undefined, signal);
+            yield { type: 'compacted', before, summary };
+          } catch (e) {
+            if (!signal?.aborted) yield { type: 'error', message: `Auto-compaction failed: ${errorMessage(e)}` };
+          }
         }
       }
       await this.opts.afterTurn?.();
@@ -701,15 +772,6 @@ export class Agent {
     // The note is a user message, never assistant text: the model would copy it into its next answer.
     this.messages = [...history, ...completed, { role: 'user', content: signal?.aborted ? INTERRUPTED_NOTE : FAILED_NOTE }];
   }
-}
-
-/** Hangul, Han, kana: about one token per character, not four. */
-const CJK = /[\p{Script=Hangul}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/gu;
-
-/** Tokens of one text blob: ~4 ASCII characters per token, ~1 token per CJK character. */
-function textTokens(text: string): number {
-  const cjk = text.match(CJK)?.length ?? 0;
-  return cjk + Math.ceil((text.length - cjk) / 4);
 }
 
 /** Tool results carry their text in `value` when structured; anything else counts as its JSON. */

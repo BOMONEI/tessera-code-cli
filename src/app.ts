@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import type { ToolSet } from 'ai';
 import { HOME_DIR, THINKING_LEVELS, addProjectAllowRule, loadConfig, projectTrust, resolveApiKey, saveGlobalSetting, trustProject, type Config, type ThinkingLevel } from './config.js';
 import { loadCatalog, findModel, isAllowedModel, isZdr, modelIsZdr, type ModelInfo } from './providers/catalog.js';
@@ -259,6 +260,20 @@ export async function createApp(opts: AppOptions): Promise<App> {
     thinkingAuto: config.thinkingAuto,
     fallback: { models: fallbackModels, firstTokenTimeoutMs: config.fallback.firstTokenTimeoutMs, stickyMs: config.fallback.stickyMs },
     contextLimit: config.contextLimit,
+    // After a compaction the current heads of recently edited files are re-injected (claude-code restores them):
+    // up to 5 files, ~5k tokens each.
+    recentFiles: async () => {
+      const out: Array<{ path: string; content: string }> = [];
+      for (const p of checkpoints.recentTouched(5)) {
+        try {
+          const content = (await readFile(p, 'utf8')).slice(0, 20_000);
+          out.push({ path: p, content: content.length === 20_000 ? `${content}\n… (truncated)` : content });
+        } catch {
+          // deleted or unreadable since: skip
+        }
+      }
+      return out;
+    },
     earlyTools: !hooks.configured,
     beforeTurn: async (prompt) => {
       const hook = hooks.configured ? await hooks.run('UserPromptSubmit', { prompt }) : {};

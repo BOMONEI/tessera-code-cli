@@ -518,6 +518,7 @@ export function TuiApp({
     // user types, which breaks an IME composition — so they are coalesced in a short debounce.
     let batch: SubagentProgress[] = [];
     let progressTimer: ReturnType<typeof setTimeout> | undefined;
+    let updateTimer: ReturnType<typeof setInterval> | undefined;
     core.onTaskProgress = (p) => {
       batch.push(p);
       progressTimer ??= setTimeout(() => {
@@ -571,16 +572,28 @@ export function TuiApp({
     // MCP status lives in the HUD (connected/configured); /mcp lists the servers and their errors.
     void core.mcpReady.then(() => setMcp(mcpCounts(core.mcpStatus)));
     if (core.config.updateCheck !== false) {
-      void import('../../update.js')
-        .then(({ availableUpdate }) => availableUpdate(VERSION))
-        .then((latest) => {
-          if (!latest) return;
-          setUpdate(latest);
-          push({ kind: 'info', text: `↑ tessera-code ${latest} is available (you have ${VERSION}). Update: tessera-code update` });
-        });
+      // Checked at startup and then hourly while the session runs; the bottom bar keeps showing the notice, and the
+      // info line appears once per version.
+      let announced: string | undefined;
+      const checkUpdate = () =>
+        void import('../../update.js')
+          .then(({ availableUpdate }) => availableUpdate(VERSION))
+          .then((latest) => {
+            if (!latest) return;
+            setUpdate(latest);
+            if (announced !== latest) {
+              announced = latest;
+              push({ kind: 'info', text: `↑ tessera-code ${latest} is available (you have ${VERSION}). Update: tessera-code update` });
+            }
+          });
+      checkUpdate();
+      updateTimer = setInterval(checkUpdate, 3_600_000);
     }
     void core.listSkills().then((skills) => loadCommands(core.ctx.cwd, skills)).then((all) => setCommands(all.map(({ name, description, argHint }) => ({ name, description, argHint }))));
-    return () => clearTimeout(progressTimer);
+    return () => {
+      clearTimeout(progressTimer);
+      if (updateTimer) clearInterval(updateTimer);
+    };
   }, [bridge, core.ctx.cwd]);
 
   // The terminal tab shows the session: the folder until a title is generated (after the first turn), then the

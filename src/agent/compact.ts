@@ -2,6 +2,15 @@ import { generateText, streamText, type ModelMessage } from 'ai';
 import { createModel } from '../providers/index.js';
 import type { ModelInfo } from '../providers/catalog.js';
 
+/** Hangul, Han, kana: about one token per character, not four (shared with the agent's gauge estimator). */
+const CJK = /[\p{Script=Hangul}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/gu;
+
+/** Tokens of one text blob: ~4 ASCII characters per token, ~1 token per CJK character. */
+export function textTokens(text: string): number {
+  const cjk = text.match(CJK)?.length ?? 0;
+  return cjk + Math.ceil((text.length - cjk) / 4);
+}
+
 const SUMMARY_PROMPT = `Summarize the conversation so far so that work can continue in a fresh context window. The summary replaces the full history, so include everything needed to continue:
 
 1. The user's requests and intent, in their own words where it matters
@@ -123,6 +132,64 @@ export function compactedHistory(summary: string): ModelMessage[] {
     { role: 'user', content: `This session continues from an earlier conversation that was compacted. Summary:\n\n${summary}` },
     { role: 'assistant', content: 'Understood. I will continue from where we left off.' },
   ];
+}
+
+/** Rough per-message token estimate for compaction decisions (text-based, like the gauge estimator). */
+export function estimateMessagesTokens(messages: ModelMessage[]): number {
+  let tokens = 0;
+  let images = 0;
+  for (const m of messages) {
+    tokens += 8;
+    const parts = typeof m.content === 'string' ? [{ type: 'text', text: m.content }] : (m.content as Array<{ type: string; text?: string }>);
+    for (const p of parts) {
+      if (p.type === 'image' || p.type === 'file') images++;
+      else if (typeof p.text === 'string') tokens += textTokens(p.text);
+      else tokens += textTokens(JSON.stringify(p));
+    }
+  }
+  return tokens + images * 1_500;
+}
+
+const CLEARED_RESULT = '[older tool result cleared to save context — re-run the tool or read the file if you need it again]';
+
+/** Claude-code-style microcompact: clears the tool results of older turns (the most recent `protect` results stay
+ *  intact) without any LLM call. Returns undefined when there is nothing to clear. */
+export function pruneToolResults(messages: ModelMessage[], protect = 3): ModelMessage[] | undefined {
+  const resultIdx: number[] = [];
+  messages.forEach((m, i) => {
+    if (m.role === 'tool') resultIdx.push(i);
+  });
+  if (resultIdx.length <= protect) return undefined;
+  const cutoff = resultIdx[resultIdx.length - protect]!;
+  let changed = false;
+  const out = messages.map((m, i) => {
+    if (m.role !== 'tool' || i >= cutoff) return m;
+    changed = true;
+    const content = Array.isArray(m.content)
+      ? (m.content as Array<{ type: string }>).map((p) => (p.type === 'tool-result' ? { ...p, output: { type: 'text', value: CLEARED_RESULT } } : p))
+      : m.content;
+    return { ...m, content } as ModelMessage;
+  });
+  return changed ? out : undefined;
+}
+
+/** Compaction keeps a verbatim tail (claude-code keeps a short tail; gemini keeps 30%): the last messages worth up
+ *  to 25% of the history (8k–40k tokens) stay as-is and only the older part is summarized. The tail always starts
+ *  at a user message, so a tool call is never cut from its result. */
+const TAIL_SHARE = 0.25;
+const TAIL_MIN_TOKENS = 8_000;
+const TAIL_MAX_TOKENS = 40_000;
+
+export function splitForCompaction(messages: ModelMessage[]): [ModelMessage[], ModelMessage[]] {
+  const budget = Math.min(TAIL_MAX_TOKENS, Math.max(TAIL_MIN_TOKENS, Math.round(estimateMessagesTokens(messages) * TAIL_SHARE)));
+  let acc = 0;
+  let split = 0;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    acc += estimateMessagesTokens([messages[i]!]);
+    if (acc > budget) break;
+    if (messages[i]!.role === 'user') split = i;
+  }
+  return [messages.slice(0, split), messages.slice(split)];
 }
 
 /** Cleans a model-written title; undefined when nothing usable is left (e.g. the model answered the request). */

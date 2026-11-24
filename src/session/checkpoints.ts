@@ -127,6 +127,15 @@ export class Checkpoints {
     return result;
   }
 
+  /** Distinct file paths touched this session, newest first (compaction re-injects the latest few). */
+  recentTouched(limit: number): string[] {
+    const out: string[] = [];
+    for (let i = this.list.length - 1; i >= 0 && out.length < limit; i--) {
+      for (const f of [...this.list[i]!.files].reverse()) if (!out.includes(f.path)) out.push(f.path);
+    }
+    return out;
+  }
+
   /** Unified diff of every file changed in this session, against its content before the first change. */
   async diff(): Promise<string> {
     const original = new Map<string, string | undefined>();

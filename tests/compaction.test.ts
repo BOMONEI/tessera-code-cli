@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { tool } from 'ai';
+import { tool, type ModelMessage } from 'ai';
 import { z } from 'zod';
 import type { LanguageModelV4, LanguageModelV4StreamPart } from '@ai-sdk/provider';
 import type { ModelInfo } from '../src/providers/catalog.js';
@@ -65,6 +65,7 @@ vi.mock('../src/providers/index.js', async (orig) => ({
 vi.mock('../src/cost/ledger.js', () => ({ recordSpend: async () => {} }));
 
 const { Agent } = await import('../src/agent/agent.js');
+const { pruneToolResults, splitForCompaction } = await import('../src/agent/compact.js');
 type AgentEvent = import('../src/agent/agent.js').AgentEvent;
 type AgentEventOf<T extends AgentEvent['type']> = Extract<AgentEvent, { type: T }>;
 
@@ -378,5 +379,40 @@ describe('compaction progress', async () => {
     await expect(a.compact()).rejects.toThrow(/summary failed/);
     failSummary = false;
     expect(seen).not.toContain('done');
+  });
+});
+
+describe('compaction split and prune', () => {
+  const user = (t: string) => ({ role: 'user' as const, content: t });
+  const assistant = (t: string) => ({ role: 'assistant' as const, content: t });
+  const toolMsg = (id: string) => ({
+    role: 'tool' as const,
+    content: [{ type: 'tool-result' as const, toolCallId: id, toolName: 'big', output: { type: 'text' as const, value: 'x'.repeat(200) } }],
+  });
+  const out = (m: { content: unknown }) => String((m.content as Array<{ output: { value: string } }>)[0]!.output.value);
+
+  it('keeps a verbatim tail that starts at a user message (never splits a tool call from its result)', () => {
+    const messages: ModelMessage[] = [
+      user('a'),
+      assistant('b'),
+      user('c'),
+      { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'big', input: '{}' }] },
+      toolMsg('c1'),
+      assistant('done'),
+    ];
+    const [toCompress, tail] = splitForCompaction(messages);
+    expect(tail[0]!.role).toBe('user');
+    expect(tail.length).toBeGreaterThan(0);
+    expect([...toCompress, ...tail]).toEqual(messages);
+  });
+
+  it('prunes older tool results and keeps the most recent three', () => {
+    const messages = [user('q'), toolMsg('1'), toolMsg('2'), toolMsg('3'), toolMsg('4'), toolMsg('5')];
+    const pruned = pruneToolResults(messages)!;
+    expect(out(pruned[1]!)).toContain('cleared');
+    expect(out(pruned[2]!)).toContain('cleared');
+    expect(out(pruned[3]!)).toBe('x'.repeat(200)); // the last three stay intact
+    expect(out(pruned[5]!)).toBe('x'.repeat(200));
+    expect(pruneToolResults([user('q'), toolMsg('1'), toolMsg('2')])).toBeUndefined(); // nothing to clear
   });
 });
