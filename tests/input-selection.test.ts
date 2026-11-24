@@ -87,11 +87,19 @@ describe('copy on select hint', async () => {
   const { tmpdir } = await import('node:os');
   it('reads the VS Code setting', () => {
     const home = mkdtempSync(join(tmpdir(), 'tessera-vsc-'));
-    expect(copyOnSelect({ TERM_PROGRAM: 'vscode' }, home).ok).toBe('warn');
-    mkdirSync(join(home, 'Library', 'Application Support', 'Code', 'User'), { recursive: true });
-    writeFileSync(join(home, 'Library', 'Application Support', 'Code', 'User', 'settings.json'), '{\n  "terminal.integrated.copyOnSelection": true\n}');
-    expect(copyOnSelect({ TERM_PROGRAM: 'vscode' }, home).ok).toBe(true);
-    expect(copyOnSelect({ TERM_PROGRAM: 'Apple_Terminal' }, home).ok).toBe('warn');
+    // The VS Code settings folder is platform-dependent; pin it so the test does not depend on the CI platform.
+    const base = (p: string) =>
+      p === 'win32' ? join(home, 'Code', 'User') : p === 'linux' ? join(home, '.config', 'Code', 'User') : join(home, 'Library', 'Application Support', 'Code', 'User');
+    expect(copyOnSelect({ TERM_PROGRAM: 'vscode' }, home, 'darwin').ok).toBe('warn');
+    mkdirSync(base('darwin'), { recursive: true });
+    writeFileSync(join(base('darwin'), 'settings.json'), '{\n  "terminal.integrated.copyOnSelection": true\n}');
+    expect(copyOnSelect({ TERM_PROGRAM: 'vscode' }, home, 'darwin').ok).toBe(true);
+    expect(copyOnSelect({ TERM_PROGRAM: 'vscode', APPDATA: home }, home, 'win32').ok).toBe('warn'); // Windows looks in %APPDATA%
+    mkdirSync(base('win32'), { recursive: true });
+    writeFileSync(join(base('win32'), 'settings.json'), '{\n  "terminal.integrated.copyOnSelection": true\n}');
+    expect(copyOnSelect({ TERM_PROGRAM: 'vscode', APPDATA: home }, home, 'win32').ok).toBe(true);
+    expect(copyOnSelect({ TERM_PROGRAM: 'vscode' }, home, 'linux').ok).toBe('warn');
+    expect(copyOnSelect({ TERM_PROGRAM: 'Apple_Terminal' }, home, 'darwin').ok).toBe('warn');
   });
 });
 

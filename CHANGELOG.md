@@ -3,6 +3,7 @@
 ## 0.7.18 — 2026-11-20
 
 ### Added
+- The shorter alias `tessera` runs the tool too (both commands are installed; `tessera-code` keeps working).
 - **Windows support.** The bash tool and hooks resolve their interpreter once per process: `/bin/bash` on
   macOS/Linux as before; on Windows Git Bash keeps bash semantics (System32's WSL launcher excluded), falling back
   to `cmd.exe`. Process kills use `taskkill /T /F` there, and a spawn failure reports as a result instead of

@@ -48,6 +48,7 @@
   "type": "module",
   "private": true,
   "bin": {
+    "tessera": "./bin/tessera-code.js",
     "tessera-code": "./bin/tessera-code.js"
   },
   "files": [

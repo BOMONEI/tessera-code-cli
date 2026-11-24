@@ -102,11 +102,11 @@ export async function runDoctor(app: App): Promise<Check[]> {
  * Copying output by dragging over it is the terminal's job: printed output lives in the terminal's scrollback,
  * where the app cannot see the selection. Reports whether this terminal copies a selection by itself.
  */
-export function copyOnSelect(env = process.env, home = homedir()): Check {
+export function copyOnSelect(env = process.env, home = homedir(), platform = process.platform): Check {
   const name = 'Copy on select';
   switch (env.TERM_PROGRAM) {
     case 'vscode': {
-      const base = process.platform === 'win32' ? join(env.APPDATA ?? join(home, 'AppData', 'Roaming')) : process.platform === 'linux' ? join(home, '.config') : join(home, 'Library', 'Application Support');
+      const base = platform === 'win32' ? (env.APPDATA ?? join(home, 'AppData', 'Roaming')) : platform === 'linux' ? join(home, '.config') : join(home, 'Library', 'Application Support');
       const dirs = ['Code', 'Code - Insiders', 'Cursor', 'VSCodium'].map((d) => join(base, d, 'User', 'settings.json'));
       const on = dirs.some((f) => {
         try {

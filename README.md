@@ -15,7 +15,7 @@ prompt, so a typical "fix X in file Y" finishes in a single tool step.
 curl -fsSL https://raw.githubusercontent.com/BOMONEI/tessera-code-cli/main/install.sh | bash
 ```
 
-Then run `tessera-code` in a project folder and register your OpenCode Go API key once with `/auth <key>`.
+Then run `tessera-code` (or just `tessera`) in a project folder and register your OpenCode Go API key once with `/auth <key>`.
 
 - Needs Node.js 22+ and npm (the installer says how to get them if missing). Nothing else is downloaded: the
   package bundles everything.
@@ -34,7 +34,7 @@ Then run `tessera-code` in a project folder and register your OpenCode Go API ke
 ```bash
 npm install
 npm run build
-npm link            # optional: puts `tessera-code` on PATH
+npm link            # optional: puts `tessera` / `tessera-code` on PATH
 ```
 
 Releases: pushing a tag `vX.Y.Z` (matching `package.json`) runs `.github/workflows/release.yml`. It tests, builds
