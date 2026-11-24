@@ -2,24 +2,20 @@ import { spawn } from 'node:child_process';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { bashRule } from '../permissions.js';
+import { killTree, shellPrefix } from '../shellpath.js';
 import { type ToolContext, truncate } from './context.js';
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TIMEOUT_MS = 600_000;
 const MAX_BUFFER = 2_000_000;
 
-export function runShell(command: string, cwd: string, timeoutMs: number, signal?: AbortSignal): Promise<{ code: number | null; output: string; timedOut: boolean }> {
-  return new Promise((resolve) => {
-    const child = spawn('/bin/bash', ['-c', command], { cwd, env: { ...process.env, TESSERA_CODE: '1' }, detached: true });
+export async function runShell(command: string, cwd: string, timeoutMs: number, signal?: AbortSignal): Promise<{ code: number | null; output: string; timedOut: boolean }> {
+  return new Promise(async (resolve) => {
+    const { argv } = await shellPrefix();
+    const child = spawn(argv[0]!, [...argv.slice(1), command], { cwd, env: { ...process.env, TESSERA_CODE: '1' }, detached: true });
     let output = '';
     let timedOut = false;
-    const kill = () => {
-      try {
-        process.kill(-child.pid!, 'SIGKILL'); // kill the whole process group
-      } catch {
-        child.kill('SIGKILL');
-      }
-    };
+    const kill = () => killTree(child);
     const timer = setTimeout(() => {
       timedOut = true;
       kill();
@@ -33,6 +29,12 @@ export function runShell(command: string, cwd: string, timeoutMs: number, signal
     };
     child.stdout.on('data', append);
     child.stderr.on('data', append);
+    child.on('error', (e) => {
+      // spawn itself failed (missing interpreter): report it instead of crashing the process.
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', kill);
+      resolve({ code: null, output: `${output}${output ? '\n' : ''}[could not run the shell: ${e.message}]`, timedOut: false });
+    });
     child.on('close', (code) => {
       clearTimeout(timer);
       signal?.removeEventListener('abort', kill);

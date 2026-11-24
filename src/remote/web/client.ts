@@ -274,7 +274,7 @@ function showState(s: SessionState): void {
   if (opt) opt.textContent = label(s);
 }
 
-const label = (s: SessionState) => `${s.title ?? s.session.slice(0, 8)} — ${s.cwd.split('/').pop() || s.cwd}`;
+const label = (s: SessionState) => `${s.title ?? s.session.slice(0, 8)} — ${s.cwd.split(/[\\/]/).pop() || s.cwd}`;
 
 function connect(id: string): void {
   source?.abort();

@@ -136,7 +136,7 @@ describe('global config file', () => {
     expect(existsSync(GLOBAL_INSTRUCTIONS)).toBe(false);
     expect(JSON.parse(readFileSync(GLOBAL_CONFIG, 'utf8'))).toEqual(DEFAULT_CONFIG_FILE);
     expect(DEFAULT_CONFIG_FILE).toMatchObject({ thinkingLevel: 'medium', permissionMode: 'default' });
-    expect(statSync(GLOBAL_CONFIG).mode & 0o777).toBe(0o600);
+    if (process.platform !== 'win32') expect(statSync(GLOBAL_CONFIG).mode & 0o777).toBe(0o600); // Windows chmod keeps only the read-only bit
     // An existing file (possibly edited by the user) is never overwritten.
     writeFileSync(GLOBAL_CONFIG, JSON.stringify({ permissionMode: 'plan' }));
     writeFileSync(GLOBAL_INSTRUCTIONS, 'my own rules');

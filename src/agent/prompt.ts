@@ -7,6 +7,7 @@ import { HOME_DIR } from '../config.js';
 import { primeProjectFiles, projectFileList } from './attachments.js';
 
 import { skillsSection, type Skill } from '../skills.js';
+import { shellPrefix } from '../shellpath.js';
 
 const INSTRUCTION_FILES = ['TESSERA.md', 'AGENTS.md', 'CLAUDE.md'];
 
@@ -124,11 +125,11 @@ export function agentsSection(parallel: number): string {
 
 export async function buildSystemPrompt(cwd: string, modelId: string, skills: Skill[] = [], agents?: { parallel: number }): Promise<string> {
   // git status, the file listing and instruction files are read concurrently.
-  const [gitBlock, , instructions] = await Promise.all([gitInfo(cwd), primeProjectFiles(cwd), loadProjectInstructions(cwd)]);
+  const [gitBlock, , instructions, shell] = await Promise.all([gitInfo(cwd), primeProjectFiles(cwd), loadProjectInstructions(cwd), shellPrefix()]);
   const env = [
     `Working directory: ${cwd}`,
     `Platform: ${platform()} ${release()}`,
-    `Shell: bash`,
+    `Shell: ${shell.label === 'cmd' ? 'cmd (Windows command line; no POSIX paths or bash syntax)' : 'bash'}`,
     `Date: ${new Date().toISOString().slice(0, 10)}`,
     `Model: ${modelId} (via OpenCode Go)`,
     gitBlock,

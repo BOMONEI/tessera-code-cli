@@ -42,7 +42,7 @@ describe('API key in config.json', () => {
     writeFileSync(GLOBAL_CONFIG, JSON.stringify({ model: 'glm-5.3-flash', permissionMode: 'plan' }));
     await ensureGlobalDefaults();
     expect(config()).toEqual({ apiKey: '', model: 'glm-5.3-flash', permissionMode: 'plan', mcpServers: DEFAULT_MCP_SERVERS });
-    expect(statSync(GLOBAL_CONFIG).mode & 0o777).toBe(0o600);
+    if (process.platform !== 'win32') expect(statSync(GLOBAL_CONFIG).mode & 0o777).toBe(0o600); // Windows chmod keeps only the read-only bit
     // Present already (even empty): left alone.
     writeFileSync(GLOBAL_CONFIG, JSON.stringify({ apiKey: 'sk-kept', model: 'x', mcpServers: DEFAULT_MCP_SERVERS }));
     await ensureGlobalDefaults();
@@ -61,7 +61,7 @@ describe('API key in config.json', () => {
     await ensureGlobalDefaults();
     await saveApiKey('sk-saved-abcd');
     expect(config()).toMatchObject({ apiKey: 'sk-saved-abcd', model: DEFAULT_CONFIG_FILE.model, permissionMode: 'default' });
-    expect(statSync(GLOBAL_CONFIG).mode & 0o777).toBe(0o600);
+    if (process.platform !== 'win32') expect(statSync(GLOBAL_CONFIG).mode & 0o777).toBe(0o600); // Windows chmod keeps only the read-only bit
     expect(await resolveApiKey()).toEqual({ key: 'sk-saved-abcd', source: '~/.tessera-code/config.json' });
     process.env.OPENCODE_API_KEY = 'sk-env';
     expect((await resolveApiKey())?.source).toBe('env OPENCODE_API_KEY');

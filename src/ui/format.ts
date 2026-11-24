@@ -159,7 +159,8 @@ export function gitBranch(cwd: string): Promise<string | undefined> {
 /** Path for display: home directory as "~". */
 export function tildePath(path: string): string {
   const home = homedir();
-  return home && (path === home || path.startsWith(home + '/')) ? '~' + path.slice(home.length) : path;
+  const next = home ? path[home.length] : undefined;
+  return home && (path === home || (path.startsWith(home) && (next === '/' || next === '\\'))) ? '~' + path.slice(home.length) : path;
 }
 
 /** Bell plus an OSC 9 desktop notification (iTerm2, Ghostty, WezTerm, kitty; others just beep or ignore it). */

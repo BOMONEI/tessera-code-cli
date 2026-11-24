@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { killTree, shellPrefix } from './shellpath.js';
 
 export type HookEvent = 'PreToolUse' | 'PostToolUse' | 'UserPromptSubmit' | 'Stop';
 
@@ -21,17 +22,12 @@ export interface HookOutcome {
 const DEFAULT_TIMEOUT_MS = 60_000;
 
 function runHook(hook: HookConfig, payload: unknown, cwd: string): Promise<{ code: number | null; stdout: string; stderr: string }> {
-  return new Promise((resolve) => {
-    const child = spawn('/bin/bash', ['-c', hook.command], { cwd, env: { ...process.env, TESSERA_PROJECT_DIR: cwd }, detached: true });
+  return new Promise(async (resolve) => {
+    const { argv } = await shellPrefix();
+    const child = spawn(argv[0]!, [...argv.slice(1), hook.command], { cwd, env: { ...process.env, TESSERA_PROJECT_DIR: cwd }, detached: true });
     let stdout = '';
     let stderr = '';
-    const timer = setTimeout(() => {
-      try {
-        process.kill(-child.pid!, 'SIGKILL'); // whole process group, so grandchildren holding stdout die too
-      } catch {
-        child.kill('SIGKILL');
-      }
-    }, hook.timeout_ms ?? DEFAULT_TIMEOUT_MS);
+    const timer = setTimeout(() => killTree(child), hook.timeout_ms ?? DEFAULT_TIMEOUT_MS); // the tree dies too, so grandchildren holding stdout cannot outlive it
     child.stdout.on('data', (d) => (stdout += d));
     child.stderr.on('data', (d) => (stderr += d));
     child.on('error', (e) => {

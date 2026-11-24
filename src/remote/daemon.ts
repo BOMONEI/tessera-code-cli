@@ -23,7 +23,7 @@ export interface RemoteSettings {
   relay?: { url: string; token: string };
 }
 
-const expand = (p: string) => (p === '~' || p.startsWith('~/') ? join(homedir(), p.slice(1)) : p);
+const expand = (p: string) => (p === '~' || p.startsWith('~/') || p.startsWith('~\\') ? join(homedir(), p.slice(1)) : p);
 
 /** "remote": { "port", "roots", "relay" } from ~/.tessera-code/config.json (the user's own file only, never a project's). */
 export async function remoteSettings(cwd: string): Promise<RemoteSettings> {
@@ -171,8 +171,9 @@ export async function serve(opts: ServeOptions): Promise<void> {
   };
   opts.log(`tessera-code serve: http://127.0.0.1:${server.port}`);
   opts.log(`Sessions may open in: ${settings.roots.join(', ')}`);
-  if (settings.roots.some((r) => r === homedir() || r === '/')) {
-    opts.log(`⚠ That includes your whole ${settings.roots.includes('/') ? 'disk' : 'home directory'}; set "remote.roots" in ${GLOBAL_CONFIG} to the projects you want.`);
+  const wholeRoot = (r: string) => r === homedir() || r === '/' || /^[A-Za-z]:[\\/]?$/.test(r);
+  if (settings.roots.some(wholeRoot)) {
+    opts.log(`⚠ That includes your whole ${settings.roots.some((r) => r === homedir()) ? 'home directory' : 'disk'}; set "remote.roots" in ${GLOBAL_CONFIG} to the projects you want.`);
   }
   opts.log('A paired browser can do anything you can in a terminal here (including "!" shell lines). Pair only your own devices.');
   opts.log(`Paired devices: ${devices.all.length}${devices.all.length ? ` (${devices.all.map((d) => d.name).join(', ')})` : ''}`);

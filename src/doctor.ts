@@ -15,6 +15,14 @@ export interface Check {
 }
 
 function has(cmd: string): boolean {
+  if (process.platform === 'win32') {
+    try {
+      execFileSync('where', [cmd], { stdio: 'ignore' });
+      return true;
+    } catch {
+      return false;
+    }
+  }
   try {
     execFileSync('/bin/sh', ['-c', `command -v ${cmd}`], { stdio: 'ignore' });
     return true;
@@ -77,9 +85,10 @@ export async function runDoctor(app: App): Promise<Check[]> {
   for (const w of app.warnings) checks.push({ ok: 'warn', name: 'Config', detail: w });
 
   const truecolor = /truecolor|24bit/i.test(process.env.COLORTERM ?? '');
-  checks.push({ ok: truecolor ? true : 'warn', name: 'Terminal', detail: `${process.env.TERM_PROGRAM ?? process.env.TERM ?? 'unknown'} ${process.stdout.columns ?? '?'}×${process.stdout.rows ?? '?'}${truecolor ? ', truecolor' : ', no truecolor (icon colors approximated)'}` });
+  const terminalName = process.env.TERM_PROGRAM ?? (process.platform === 'win32' && process.env.WT_SESSION ? 'Windows Terminal' : process.env.TERM) ?? 'unknown';
+  checks.push({ ok: truecolor ? true : 'warn', name: 'Terminal', detail: `${terminalName} ${process.stdout.columns ?? '?'}×${process.stdout.rows ?? '?'}${truecolor ? ', truecolor' : ', no truecolor (icon colors approximated)'}` });
 
-  const clip = process.platform === 'darwin' ? has('pbcopy') : has('wl-copy') || has('xclip') || has('xsel');
+  const clip = process.platform === 'win32' ? has('clip') : process.platform === 'darwin' ? has('pbcopy') : has('wl-copy') || has('xclip') || has('xsel');
   checks.push({ ok: clip ? true : 'warn', name: 'Clipboard', detail: clip ? 'available for /copy' : 'no clipboard tool; /copy falls back to OSC 52' });
 
   checks.push(copyOnSelect());
@@ -97,7 +106,8 @@ export function copyOnSelect(env = process.env, home = homedir()): Check {
   const name = 'Copy on select';
   switch (env.TERM_PROGRAM) {
     case 'vscode': {
-      const dirs = ['Code', 'Code - Insiders', 'Cursor', 'VSCodium'].map((d) => join(home, 'Library', 'Application Support', d, 'User', 'settings.json'));
+      const base = process.platform === 'win32' ? join(env.APPDATA ?? join(home, 'AppData', 'Roaming')) : process.platform === 'linux' ? join(home, '.config') : join(home, 'Library', 'Application Support');
+      const dirs = ['Code', 'Code - Insiders', 'Cursor', 'VSCodium'].map((d) => join(base, d, 'User', 'settings.json'));
       const on = dirs.some((f) => {
         try {
           return /"terminal\.integrated\.copyOnSelection"\s*:\s*true/.test(readFileSync(f, 'utf8'));

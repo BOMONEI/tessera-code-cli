@@ -69,14 +69,23 @@ export function searchTools(ctx: ToolContext) {
         let out: Awaited<ReturnType<typeof run>>;
         try {
           out = await run('rg', args, ctx.cwd);
-        } catch {
-          // ripgrep not installed: fall back to grep -rn
+        } catch (e) {
+          // ripgrep not installed: fall back to grep -rn (on Windows grep usually does not exist either).
           const flags = [...(ignore_case ? ['-i'] : []), ...(files_only ? ['-l'] : []), ...(glob ? [`--include=${glob}`] : [])];
-          out = await run('grep', ['-rnE', ...flags, '--exclude-dir=node_modules', '--exclude-dir=.git', '-e', pattern, resolvePath(ctx, path ?? '.')], ctx.cwd);
+          try {
+            out = await run('grep', ['-rnE', ...flags, '--exclude-dir=node_modules', '--exclude-dir=.git', '-e', pattern, resolvePath(ctx, path ?? '.')], ctx.cwd);
+          } catch {
+            throw new Error(
+              process.platform === 'win32'
+                ? 'Neither ripgrep (rg) nor grep is installed. Install ripgrep: winget install BurntSushi.ripgrep.MSVC'
+                : `ripgrep is not installed and grep failed: ${(e as Error).message}`,
+            );
+          }
         }
         if (out.code === 1) return 'No matches found';
         if (out.code !== 0) throw new Error(out.stderr.trim() || `search failed with exit code ${out.code}`);
-        const lines = out.stdout.trim().split('\n').map((l) => l.replace(ctx.cwd + '/', ''));
+        const prefix = new RegExp(`^${ctx.cwd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[/\\\\]`);
+        const lines = out.stdout.trim().split('\n').map((l) => l.replace(prefix, ''));
         const shown = lines.slice(0, MAX_RESULTS).join('\n');
         return truncate(lines.length > MAX_RESULTS ? `${shown}\n(${lines.length - MAX_RESULTS} more matches; narrow the search)` : shown);
       },

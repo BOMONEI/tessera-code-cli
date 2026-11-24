@@ -203,8 +203,11 @@ function editInEditor(text: string): string {
   const file = join(dir, 'prompt.md');
   try {
     writeFileSync(file, text);
-    const editor = process.env.VISUAL || process.env.EDITOR || 'vi';
-    const r = spawnSync('/bin/sh', ['-c', `${editor} "$1"`, 'editor', file], { stdio: 'inherit' });
+    const editor = process.env.VISUAL || process.env.EDITOR || (process.platform === 'win32' ? 'notepad' : 'vi');
+    const r =
+      process.platform === 'win32'
+        ? spawnSync(process.env.COMSPEC ?? 'cmd.exe', ['/d', '/s', '/c', `${editor} "${file}"`], { stdio: 'inherit' }) // .cmd editors (code.cmd) resolve through cmd
+        : spawnSync('/bin/sh', ['-c', `${editor} "$1"`, 'editor', file], { stdio: 'inherit' });
     return r.status === 0 ? readFileSync(file, 'utf8').replace(/\n+$/, '') : text;
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -603,7 +606,7 @@ export function TuiApp({
     const t = core.title;
     if (t === tabTitle.current) return;
     tabTitle.current = t;
-    const label = (t ?? core.ctx.cwd.split('/').filter(Boolean).pop() ?? core.ctx.cwd).replace(/[\x00-\x1f\x7f]/g, ' ');
+    const label = (t ?? core.ctx.cwd.split(/[\\/]/).filter(Boolean).pop() ?? core.ctx.cwd).replace(/[\x00-\x1f\x7f]/g, ' ');
     process.stdout.write(`\x1b]0;tessera-code · ${label}\x07`);
   });
 

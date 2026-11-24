@@ -233,7 +233,7 @@ export function suggestFiles(cwd: string, query: string, limit = 8): string[] {
   if (!entry.withDirs) {
     const dirs = new Set<string>();
     for (const f of entry.files) {
-      const parts = f.split('/');
+      const parts = f.split(/[\\/]/);
       for (let i = 1; i < parts.length; i++) dirs.add(parts.slice(0, i).join('/') + '/');
     }
     entry.withDirs = [...dirs, ...entry.files];

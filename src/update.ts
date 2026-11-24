@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -117,6 +117,26 @@ export async function runUpdate(current: string, opts: { check?: boolean }, io: 
     return 1;
   }
   const base = `https://github.com/${RELEASE_REPO}/releases/download/v${latest}`;
+  // install.sh is bash-only; on Windows the SHA-verified release tarball is installed through npm instead.
+  if (process.platform === 'win32') {
+    const tgzName = `tessera-code-${latest}.tgz`;
+    const [tgz, sums] = await Promise.all([download(`${base}/${tgzName}`, fetchFn), download(`${base}/SHA256SUMS`, fetchFn)]);
+    const expected = expectedSha256(sums, tgzName);
+    if (!expected || expected !== createHash('sha256').update(tgz).digest('hex')) {
+      throw new Error(`${tgzName} does not match its SHA256SUMS; nothing was changed.`);
+    }
+    const dir = await mkdtemp(join(tmpdir(), 'tessera-update-'));
+    const tarball = join(dir, tgzName);
+    await writeFile(tarball, tgz);
+    try {
+      const r = spawnSync(process.env.COMSPEC ?? 'cmd.exe', ['/d', '/s', '/c', `npm install -g "${tarball}"`], { stdio: 'inherit' });
+      if (r.status !== 0) return r.status ?? 1;
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+    io.write(`\nUpdated ${current} → ${latest}. The next start shows what changed (or run /changelog).\n`);
+    return 0;
+  }
   const [script, sums] = await Promise.all([download(`${base}/install.sh`, fetchFn), download(`${base}/SHA256SUMS`, fetchFn)]);
   const expected = expectedSha256(sums, 'install.sh');
   const actual = createHash('sha256').update(script).digest('hex');

@@ -203,7 +203,11 @@ export class PermissionManager {
 
 // Tools whose first word alone says little (npx runs anything); remember them with their subcommand.
 const MULTI_COMMAND = new Set(['npx', 'npm', 'pnpm', 'yarn', 'bunx', 'bun', 'git', 'docker', 'kubectl', 'cargo', 'go', 'uv']);
-const UNGENERALIZABLE = new Set(['node', 'python', 'python3', 'perl', 'ruby', 'deno', 'php', 'osascript', 'eval', 'source', 'sudo', 'doas', 'ssh', 'curl', 'wget']);
+const UNGENERALIZABLE = new Set([
+  'node', 'python', 'python3', 'perl', 'ruby', 'deno', 'php', 'osascript', 'eval', 'source', 'sudo', 'doas', 'ssh', 'curl', 'wget',
+  // Windows: interpreters and system-state tools, same rule as the Unix ones.
+  'powershell', 'pwsh', 'cmd', 'reg', 'regedit', 'schtasks', 'setx', 'rundll32', 'wscript', 'cscript', 'msiexec',
+]);
 
 /**
  * Rule to remember for a bash command, e.g. "ls -la" -> "bash(ls *)", "npm run build" -> "bash(npm run *)".

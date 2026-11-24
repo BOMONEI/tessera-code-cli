@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.7.18 — 2026-11-20
+
+### Added
+- **Windows support.** The bash tool and hooks resolve their interpreter once per process: `/bin/bash` on
+  macOS/Linux as before; on Windows Git Bash keeps bash semantics (System32's WSL launcher excluded), falling back
+  to `cmd.exe`. Process kills use `taskkill /T /F` there, and a spawn failure reports as a result instead of
+  crashing. The system prompt names the actual shell, so the model uses Windows syntax when that is what runs.
+
+### Changed
+- Windows: `tessera-code update` installs the SHA-verified release tarball through npm (install.sh is bash-only);
+  ctrl+g runs the editor through cmd (notepad as the default); /doctor uses `where`, recognizes `clip` and Windows
+  Terminal; clipboard image paste reads via PowerShell `Get-Clipboard`; large images shrink through System.Drawing;
+  dragged `C:\...` paths attach; `clip.exe` receives UTF-16LE so `/copy` keeps non-ASCII; the grep fallback names
+  `winget install BurntSushi.ripgrep.MSVC`; `tildePath`, the tab title, web session labels and @-file grouping
+  handle both separators; remote roots warn about drive roots; `powershell`, `reg`, `schtasks`, `setx`, `rundll32`,
+  `msiexec` are ungeneralizable permission rules; the LibreOffice hint names winget. MCP stdio servers needed no
+  change (their transport spawns through cross-spawn).
+
 ## 0.7.17 — 2026-11-20
 
 ### Changed

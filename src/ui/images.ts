@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { extname, join } from 'node:path';
+import { basename, extname, isAbsolute, join } from 'node:path';
 import type { ImageInput } from '../agent/agent.js';
 
 const MAX_BYTES = 10 * 1024 * 1024;
@@ -37,11 +37,25 @@ function run(cmd: string, args: string[]): Promise<Buffer | undefined> {
   });
 }
 
-/** Scales a large image file down (macOS `sips`); returns the file to use. */
+/** Scales a large image file down (macOS `sips`, Windows .NET drawing via PowerShell); returns the file to use. */
 async function shrink(file: string): Promise<string> {
-  if (process.platform !== 'darwin' || statSync(file).size <= SHRINK_ABOVE) return file;
+  if (statSync(file).size <= SHRINK_ABOVE) return file;
   const out = file.replace(/(\.\w+)?$/, '-small.jpg');
-  await run('sips', ['-Z', '2048', '-s', 'format', 'jpeg', '-s', 'formatOptions', '80', file, '--out', out]);
+  if (process.platform === 'darwin') {
+    await run('sips', ['-Z', '2048', '-s', 'format', 'jpeg', '-s', 'formatOptions', '80', file, '--out', out]);
+  } else if (process.platform === 'win32') {
+    await run('powershell', [
+      '-NoProfile',
+      '-Command',
+      `Add-Type -AssemblyName System.Drawing; $i=[System.Drawing.Image]::FromFile('${file.replace(/'/g, "''")}'); ` +
+        `$w=2048; $h=[int]($i.Height*$w/$i.Width); $s=New-Object System.Drawing.Bitmap($w,$h); ` +
+        `$g=[System.Drawing.Graphics]::FromImage($s); $g.InterpolationMode='HighQualityBicubic'; ` +
+        `$g.DrawImage($i,0,0,$w,$h); $s.Save('${out.replace(/'/g, "''")}',[System.Drawing.Imaging.ImageFormat]::Jpeg); ` +
+        `$g.Dispose(); $s.Dispose(); $i.Dispose()`,
+    ]);
+  } else {
+    await run('magick', [file, '-resize', '2048x2048>', '-quality', '80', out]);
+  }
   return existsSync(out) ? out : file;
 }
 
@@ -66,6 +80,17 @@ export async function readClipboardImage(): Promise<ClipboardImage> {
     } else if (process.platform === 'linux') {
       const out = (await run('wl-paste', ['--no-newline', '--type', 'image/png'])) ?? (await run('xclip', ['-selection', 'clipboard', '-t', 'image/png', '-o']));
       if (out?.length) writeFileSync(file, out);
+    } else if (process.platform === 'win32') {
+      // The path goes in through the environment, never into the command text.
+      const out = await new Promise<Buffer | undefined>((resolve) =>
+        execFile(
+          'powershell',
+          ['-NoProfile', '-Command', "Add-Type -AssemblyName System.Drawing; $i = Get-Clipboard -Format Image; if ($i) { $i.Save($env:TESSERA_CLIP_PNG, [System.Drawing.Imaging.ImageFormat]::Png); 'ok' } else { 'none' }"],
+          { encoding: 'buffer', timeout: 5000, env: { ...process.env, TESSERA_CLIP_PNG: file } },
+          (err) => resolve(err ? undefined : Buffer.alloc(0)),
+        ),
+      );
+      if (out === undefined) return { error: 'Could not read the clipboard (PowerShell failed).' };
     }
     if (!existsSync(file) || statSync(file).size === 0) return undefined;
     const buf = readFileSync(await shrink(file));
@@ -90,12 +115,12 @@ export function imagesFromPaths(text: string): Array<ImageInput & { name: string
   for (const token of tokens) {
     let path = token.replace(/^(['"])(.*)\1$/, '$2').replace(/\\(.)/g, '$1');
     if (path.startsWith('file://')) path = decodeURIComponent(path.slice('file://'.length));
-    if (path.startsWith('~/')) path = join(homedir(), path.slice(2));
-    if (!path.startsWith('/') || !MEDIA_TYPES[extname(path).toLowerCase()] || !existsSync(path)) return undefined;
+    if (path.startsWith('~/') || path.startsWith('~\\')) path = join(homedir(), path.slice(2));
+    if (!isAbsolute(path) || !MEDIA_TYPES[extname(path).toLowerCase()] || !existsSync(path)) return undefined;
     if (statSync(path).size > MAX_BYTES) return undefined;
     const image = toImage(readFileSync(path));
     if (!image) return undefined;
-    out.push({ ...image, name: path.split('/').pop() ?? path });
+    out.push({ ...image, name: basename(path) });
   }
   return out.length ? out : undefined;
 }

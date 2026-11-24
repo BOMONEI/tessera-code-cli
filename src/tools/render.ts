@@ -80,7 +80,8 @@ export async function findSoffice(): Promise<string | undefined> {
 
 export const NO_LIBREOFFICE =
   'Viewing documents needs LibreOffice (free), which was not found. Install it — macOS: brew install --cask libreoffice; ' +
-  'Debian/Ubuntu: sudo apt install libreoffice-impress libreoffice-writer libreoffice-calc — or set TESSERA_SOFFICE to its soffice binary. ' +
+  'Debian/Ubuntu: sudo apt install libreoffice-impress libreoffice-writer libreoffice-calc; Windows: winget install TheDocumentFoundation.LibreOffice ' +
+  '— or set TESSERA_SOFFICE to its soffice binary. ' +
   'Do not unzip the file to read its XML: that loses images and layout. Tell the user LibreOffice is needed.';
 
 // Runs inside soffice (LibreOffice's embedded Python; its standalone python is often blocked by macOS). Opens the

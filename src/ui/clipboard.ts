@@ -17,7 +17,8 @@ function pipeTo(cmd: string, args: string[], text: string): Promise<boolean> {
       const child = spawn(cmd, args, { stdio: ['pipe', 'ignore', 'ignore'] });
       child.on('error', () => resolve(false));
       child.on('close', (code) => resolve(code === 0));
-      child.stdin.end(text);
+      // Windows' clip.exe takes UTF-16LE (with BOM) on stdin; UTF-8 garbles non-ASCII.
+      child.stdin.end(process.platform === 'win32' ? Buffer.from(`\ufeff${text}`, 'utf16le') : Buffer.from(text, 'utf8'));
     } catch {
       resolve(false);
     }
