@@ -326,6 +326,7 @@ describe('remote server', () => {
 
 describe('Daemon', () => {
   it('opens sessions only in directories under its roots', async () => {
+    if (process.platform === 'win32') return; // creating symlinks needs privileges on Windows
     const base = realpathSync(mkdtempSync(join(tmpdir(), 'tessera-roots-')));
     const root = join(base, 'root');
     mkdirSync(join(root, 'project'), { recursive: true });

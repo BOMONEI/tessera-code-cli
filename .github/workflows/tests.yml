@@ -1,5 +1,6 @@
 # Runs the test suite on every push to main (and PRs), on Linux and Windows. The release workflow only runs on
-# tags, so this is what catches a regression before it ships.
+# tags, so this is what catches a regression before it ships. Failures are reported as an issue with the test
+# output tail, so the cause is readable without shell access to the runners.
 name: tests
 
 on:
@@ -7,6 +8,13 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+
+permissions:
+  issues: write
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
   test:
@@ -24,4 +32,12 @@ jobs:
           cache: npm
 
       - run: npm ci
-      - run: npm test
+      - run: npm test 2>&1 | tee test-output.log; exit ${PIPESTATUS[0]}
+
+      - name: Report the failure output
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create --title "tests: ${GITHUB_JOB} failed on ${GITHUB_SHA::7}" \
+            --body "$(tail -150 test-output.log | tail -c 40000)" --label tests

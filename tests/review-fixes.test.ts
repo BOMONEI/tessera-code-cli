@@ -149,6 +149,7 @@ describe('attachments', async () => {
   );
   it.each(['src/app.ts', 'median.ts', 'README.md', 'src/tokenizer.ts'])('%s is not secret', (p) => expect(isSecretName(p)).toBe(false));
   it('attaches mentioned project files, skipping secrets, escapes, symlinks out and vetoed files', async () => {
+    if (process.platform === 'win32') return; // creating symlinks needs privileges on Windows
     const root = mkdtempSync(join(tmpdir(), 'att-'));
     const outside = mkdtempSync(join(tmpdir(), 'out-'));
     mkdirSync(join(root, 'src'));
