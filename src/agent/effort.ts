@@ -40,3 +40,9 @@ export function autoLevel(prompt: string, max: ThinkingLevel, opts: { images?: b
   const want = promptLevel(prompt, opts);
   return rank(want) > rank(max) ? max : want;
 }
+
+/** Raises `current` to at least `floor`, capped at `cap` (auto never escalates past the configured level). */
+export function escalateLevel(current: AutoLevel, floor: AutoLevel, cap: ThinkingLevel): AutoLevel {
+  const up = Math.max(rank(current), rank(floor));
+  return (THINKING_LEVELS[Math.min(up, rank(cap))] as AutoLevel | undefined) ?? 'none';
+}

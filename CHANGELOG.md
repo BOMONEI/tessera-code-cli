@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.7.22 — 2026-11-20
+
+### Added
+- `/stats` summarizes the compaction-quality log (how many reads followed each compaction, distribution, average,
+  the five most recent); `/resume <query>` falls back to a case-insensitive title search when the id prefix does
+  not match — one hit resumes, several open a picker.
+- A friendlier empty state: one static hint line under the banner on a brand-new session, and an inviting input
+  placeholder. No timers: the IME protection is untouched.
+
+### Changed
+- Thinking is brief and iterative now: the system prompt asks for short thinking before each action, verified by
+  tools, instead of one long deliberation. And in auto mode the agent re-judges the level between steps — an edit
+  or a failed tool call raises it to low, a long loop or huge tool output to medium, capped at the configured
+  level, escalation only. The conversation shows the switch.
+
+### Fixed
+- A model stream that died mid-turn (network drop) failed the turn; transport-level errors now retry the attempt
+  once, announced in the conversation. An HTTP error with a body still reports at once.
+- The four Windows CI test failures: the runner's 8.3 short cwd made every @-attachment be refused as outside the
+  project (symlink-escape check compared two path spellings); dragged-path unescaping ate Windows backslashes;
+  skill file lists now use forward slashes; the update tarball path is injectable and the fixtures carry it.
+
 ## 0.7.21 — 2026-11-20
 
 ### Fixed

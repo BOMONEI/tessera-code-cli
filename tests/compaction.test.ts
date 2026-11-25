@@ -7,7 +7,7 @@ import type { ModelInfo } from '../src/providers/catalog.js';
 // Scripted model: stream calls follow `script`; generate calls (the summarizer) return a fixed summary.
 const prompts: unknown[] = [];
 let failSummary = false;
-const script: Array<'tool' | 'text' | 'slow' | 'bigtext'> = [];
+const script: Array<'tool' | 'text' | 'slow' | 'bigtext' | 'edit'> = [];
 let slowToolStream: ((c: ReadableStreamDefaultController<LanguageModelV4StreamPart>) => Promise<void>) | undefined;
 const usage = (input: number) => ({
   inputTokens: { total: input, noCache: input, cacheRead: 0, cacheWrite: 0 },
@@ -45,7 +45,10 @@ function mockModel(): LanguageModelV4 {
         return { stream: new ReadableStream<LanguageModelV4StreamPart>({ start: (c) => run(c) }) };
       }
       const parts: LanguageModelV4StreamPart[] = [{ type: 'stream-start', warnings: [] }];
-      if (step === 'tool') {
+      if (step === 'edit') {
+        parts.push({ type: 'tool-call', toolCallId: `c${prompts.length}`, toolName: 'edit', input: '{}' });
+        parts.push({ type: 'finish', usage: usage(900), finishReason: { unified: 'tool-calls', raw: 'tool_calls' } });
+      } else if (step === 'tool') {
         parts.push({ type: 'tool-call', toolCallId: `c${prompts.length}`, toolName: 'big', input: '{}' });
         parts.push({ type: 'finish', usage: usage(900), finishReason: { unified: 'tool-calls', raw: 'tool_calls' } });
       } else {
@@ -71,6 +74,7 @@ type AgentEventOf<T extends AgentEvent['type']> = Extract<AgentEvent, { type: T 
 
 const model: ModelInfo = { id: 'mock', name: 'mock', format: 'chat', context: 1_000_000, output: 1000, reasoning: false, cost: { input: 0, output: 0, cacheRead: 0 } };
 const big = tool({ description: 'big output', inputSchema: z.object({}), execute: async () => 'x'.repeat(2000) });
+const edit = tool({ description: 'edit', inputSchema: z.object({}), execute: async () => 'edited' });
 
 /** `window`: the model's context window. Mid-turn compaction happens only near it (90%); see the tests below. */
 function agent(contextLimit: number, window = model.context) {
@@ -444,5 +448,46 @@ describe('step limit auto-continue', () => {
     const last = events.at(-1) as AgentEventOf<'turn-finish'>;
     expect(last.stopNote).toContain('step limit');
     expect(last.finishReason).toBe('tool-calls');
+  });
+});
+
+describe('thinking auto escalates between steps', () => {
+  const auto = (thinkingLevel: 'low' | 'medium') =>
+    new Agent({ model: { ...model, reasoning: true }, apiKey: 'k', sessionId: 's', system: 'sys', tools: { big, edit }, maxSteps: 12, thinking: true, thinkingAuto: true, thinkingLevel, contextLimit: 300_000 });
+
+  it('goes up to medium after a long tool loop, within the cap', async () => {
+    prompts.length = 0;
+    script.length = 0;
+    script.push('tool', 'tool', 'tool', 'tool', 'tool', 'tool', 'tool', 'tool', 'text');
+    const a = auto('medium');
+    const events: AgentEvent[] = [];
+    for await (const ev of a.run('do the task')) events.push(ev);
+    const infos = events.filter((e) => e.type === 'info').map((e) => (e as { text: string }).text);
+    expect(infos.some((t) => t.includes('thinking auto: none → medium'))).toBe(true);
+    expect(events.at(-1)?.type).toBe('turn-finish');
+    expect(script).toHaveLength(0);
+  });
+
+  it('never escalates past the configured cap', async () => {
+    prompts.length = 0;
+    script.length = 0;
+    script.push('tool', 'tool', 'tool', 'tool', 'tool', 'tool', 'tool', 'tool', 'text');
+    const a = auto('low'); // the loop says medium, the cap says low
+    const events: AgentEvent[] = [];
+    for await (const ev of a.run('do the task')) events.push(ev);
+    const infos = events.filter((e) => e.type === 'info').map((e) => (e as { text: string }).text);
+    expect(infos.some((t) => t.includes('thinking auto: none → low'))).toBe(true);
+    expect(infos.some((t) => t.includes('medium'))).toBe(false);
+  });
+
+  it('escalates to low right after an edit step', async () => {
+    prompts.length = 0;
+    script.length = 0;
+    script.push('edit', 'text');
+    const a = auto('medium');
+    const events: AgentEvent[] = [];
+    for await (const ev of a.run('do the task')) events.push(ev);
+    const infos = events.filter((e) => e.type === 'info').map((e) => (e as { text: string }).text);
+    expect(infos.some((t) => t.includes('thinking auto: none → low'))).toBe(true);
   });
 });

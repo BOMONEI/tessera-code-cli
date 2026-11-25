@@ -26,7 +26,9 @@ vi.mock('../src/providers/index.js', async (orig) => ({
         peak = Math.max(peak, active);
         await new Promise((r) => setTimeout(r, 100));
         active--;
-        if (dropsLeft > 0) {
+        // The drop is keyed on a "drop" marker anywhere in the prompt: earlier tests' background subagents may
+        // still be streaming when the retry test runs, and they must not consume its drops.
+        if (dropsLeft > 0 && JSON.stringify(prompt).includes('drop')) {
           dropsLeft--;
           const parts: LanguageModelV4StreamPart[] = [
             { type: 'stream-start', warnings: [] },
@@ -201,7 +203,7 @@ describe('stream retry', () => {
     const { Agent } = await import('../src/agent/agent.js');
     const a = new Agent({ model, apiKey: 'k', sessionId: 's', system: 'sys', tools: {}, maxSteps: 5, thinking: false, contextLimit: 300_000 });
     const events: Array<{ type: string; text?: string }> = [];
-    for await (const ev of a.run('look at alpha')) events.push(ev as { type: string });
+    for await (const ev of a.run('drop alpha')) events.push(ev as { type: string });
     const infos = events.filter((e) => e.type === 'info').map((e) => e.text);
     expect(infos).toEqual(['stream dropped — retrying once (network)']); // exactly one retry notice
     expect(events.filter((e) => e.type === 'turn-finish')).toHaveLength(1); // one turn, finished normally
@@ -213,7 +215,7 @@ describe('stream retry', () => {
     dropsLeft = 2;
     const b = new Agent({ model, apiKey: 'k', sessionId: 's', system: 'sys', tools: {}, maxSteps: 5, thinking: false, contextLimit: 300_000 });
     const bEvents: Array<{ type: string }> = [];
-    for await (const ev of b.run('look at alpha')) bEvents.push(ev as { type: string });
+    for await (const ev of b.run('drop alpha')) bEvents.push(ev as { type: string });
     expect(bEvents.some((e) => e.type === 'error')).toBe(true);
   });
 });

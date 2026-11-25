@@ -7,7 +7,7 @@ import { recordSpend } from '../cost/ledger.js';
 import { OPENCODE_GO, splitModelId } from '../providers/registry.js';
 import { pruneToolResults, splitForCompaction, summarize, compactedHistory, textTokens, estimateMessagesTokens, type CompactProgress } from './compact.js';
 import type { ThinkingLevel } from '../config.js';
-import { autoLevel, type AutoLevel } from './effort.js';
+import { autoLevel, escalateLevel, type AutoLevel } from './effort.js';
 
 export type AgentEvent =
   | { type: 'text'; text: string }
@@ -528,6 +528,7 @@ export class Agent {
     for (;;) {
       let cutIn = false;
       let retryPending = false; // the attempt died on a network error and a retry cut-in is queued
+      let escalated = false; // auto re-judged the thinking level mid-attempt; later steps go out at the new level
       const attempt = new AbortController();
       this.stepAbort = attempt;
       const attempted = (stepsSoFar || afterInterrupt) && completed.length ? [...history, ...completed] : history;
@@ -559,6 +560,22 @@ export class Agent {
           const last = steps.at(-1);
           const toolOutput = last ? estimateTokens(last.response.messages.filter((m) => m.role === 'tool')) : 0;
           const estimate = last ? (last.usage.inputTokens ?? 0) + (last.usage.outputTokens ?? 0) + toolOutput : 0;
+          // Auto may re-judge between steps: what the tools found (edits, errors, a long loop) says more about the
+          // task's difficulty than the prompt did. Escalation only — the earlier steps cannot be un-thought — and
+          // capped at the configured level.
+          if (this.thinkingAuto && this.model.reasoning && last) {
+            const floors: AutoLevel[] = [];
+            if (last.toolCalls.some((c) => c.toolName === 'edit' || c.toolName === 'write') || JSON.stringify(last.response.messages).includes('"isError":true')) floors.push('low');
+            if (steps.length >= 8 || toolOutput > 50_000) floors.push('medium');
+            if (floors.length) {
+              const target = escalateLevel(this.turnLevel ?? 'none', floors[floors.length - 1]!, this.thinkingLevel);
+              if (target !== this.turnLevel) {
+                notices.push({ type: 'info', text: `thinking auto: ${this.turnLevel} → ${target} (the task turned out bigger)` });
+                this.turnLevel = target;
+                escalated = true;
+              }
+            }
+          }
           // Over contextLimit the turn goes on (it compacts after finishing); only the model's real window forces it now.
           if (last && estimate >= this.hardContextLimit && !compactionFailed) {
             try {
@@ -636,6 +653,9 @@ export class Agent {
             }
             for (const text of texts) notices.push({ type: 'interjection', text });
           }
+          // The per-step reasoning override: once auto has re-judged, the later steps of this attempt go out at the
+          // new level (the SDK reads `reasoning` from the prepareStep result even though its type omits it).
+          if (this.model.reasoning && escalated) return { messages: next ?? messages, reasoning: this.turnLevel } as never;
           return next ? { messages: next } : undefined;
         },
       });
