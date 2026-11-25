@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtempSync, readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, existsSync, mkdirSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ModelMessage } from 'ai';
@@ -324,5 +324,36 @@ describe('per-session memos', () => {
     // A history reset (compaction, /clear of the history) keeps the user's own notes.
     const again = parseSession(readFileSync(store.path, 'utf8').replace(/"type":"messages".*\n/g, ''));
     expect(again.memos).toEqual(['the user prefers Korean answers']);
+  });
+});
+
+describe('session retention', () => {
+  it('prunes sessions past the window, and 0 or a keep-list leaves them alone', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'tessera-prune-'));
+    const oldS = new SessionStore(cwd, 'old-session');
+    await oldS.setTitle('an old session');
+    const newS = new SessionStore(cwd, 'new-session');
+    await newS.setTitle('a recent session');
+    const oldPath = oldS.path;
+    const old = new Date(Date.now() - 30 * 86_400_000);
+    utimesSync(oldPath, old, old);
+
+    expect(await SessionStore.prune(cwd, 7, ['old-session'])).toEqual([]); // the keep-list wins
+    expect(existsSync(oldPath)).toBe(true);
+    expect(await SessionStore.prune(cwd, 0)).toEqual([]); // 0 = keep forever (the default)
+    expect(existsSync(oldPath)).toBe(true);
+    expect(await SessionStore.prune(cwd, 7)).toEqual(['old-session']);
+    expect(existsSync(oldPath)).toBe(false);
+    expect(existsSync(newS.path)).toBe(true); // untouched (inside the window)
+  });
+
+  it('remove deletes the session file and its snapshots', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'tessera-remove-'));
+    const s = new SessionStore(cwd, 'to-remove');
+    await s.setTitle('bye');
+    expect(existsSync(s.path)).toBe(true);
+    await SessionStore.remove(cwd, 'to-remove');
+    expect(existsSync(s.path)).toBe(false);
+    expect(existsSync(s.blobDir)).toBe(false);
   });
 });

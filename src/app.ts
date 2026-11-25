@@ -94,6 +94,8 @@ export interface App {
   memos(): string[];
   addMemo(text: string): Promise<void>;
   removeMemo(index: number): Promise<void>;
+  /** Deletes sessions untouched for `sessionRetentionDays` days (0 = never); returns the deleted ids. */
+  pruneSessions(): Promise<string[]>;
   /** The OpenCode Go server's own usage (percent per window); undefined for other providers or when unreachable. */
   goUsage(): Promise<GoUsage | undefined>;
   /** Live tail of a background subagent (the panel viewer); undefined when the id is unknown. */
@@ -369,6 +371,18 @@ export async function createApp(opts: AppOptions): Promise<App> {
     return mcpStatus;
   };
 
+  /** Deletes sessions older than the retention window (config `sessionRetentionDays`, 0 = keep forever), keeping
+   *  the session being resumed. Runs at startup and when /sessions is listed. */
+  const pruneSessions = async (): Promise<string[]> => {
+    const days = config.sessionRetentionDays;
+    if (!days) return [];
+    try {
+      return await SessionStore.prune(opts.cwd, days, resumeId ? [resumeId] : []);
+    } catch {
+      return []; // a locked or half-deleted file must never break startup
+    }
+  };
+
   const saveState = async () => {
     if (!agent.messages.length && !store.exists) return; // an unused session leaves no file behind
     await store.saveState({ model: agent.model.id, thinking: agent.thinking, thinkingLevel: agent.thinkingLevel, thinkingAuto: agent.thinkingAuto, mode: permissions.mode, total: { ...agent.total }, contextTokens: agent.contextTokens });
@@ -555,6 +569,7 @@ export async function createApp(opts: AppOptions): Promise<App> {
     memos: () => store.memos,
     addMemo: (text) => store.addMemo(text),
     removeMemo: (index) => store.removeMemo(index),
+    pruneSessions,
     // Real usage only for Go models: the allowance is theirs to spend; other providers have no such endpoint.
     goUsage: () => (!agent.model.provider && agent.apiKey ? fetchGoUsage(agent.apiKey) : Promise.resolve(undefined)),
     subagentTail: (id) => subagentTailTool(id),
@@ -595,5 +610,8 @@ export async function createApp(opts: AppOptions): Promise<App> {
       else void mcpConnecting.then((m) => m.close());
     },
   };
+  // Sessions untouched for longer than the retention window go away at startup (sessionRetentionDays in config;
+  // 0 = the default keeps them forever). Fire-and-forget: a locked file must not delay the app.
+  void pruneSessions();
   return app;
 }

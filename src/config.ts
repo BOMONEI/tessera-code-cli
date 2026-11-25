@@ -23,6 +23,8 @@ export interface Config {
   /** Context cap in tokens; history is compacted automatically (before or during a turn) to stay under it.
    *  Also capped at 80% of the smallest model window in the fallback chain. */
   contextLimit: number;
+  /** Delete sessions untouched for this many days; 0 (the default) keeps them forever. */
+  sessionRetentionDays: number;
   /** Persistent tool permission rules, e.g. "bash(npm test)" or "edit". */
   allow: string[];
   mcpServers: Record<string, McpServerConfig>;
@@ -88,6 +90,7 @@ const DEFAULTS: Config = {
   model: DEFAULT_MODEL,
   maxSteps: 50,
   contextLimit: 500_000,
+  sessionRetentionDays: 0,
   allow: [],
   mcpServers: {},
   hooks: {},
@@ -209,6 +212,9 @@ export async function loadConfig(cwd: string, opts: { trusted: boolean }): Promi
     if (typeof merged[k] !== 'boolean') throw new Error(`Invalid "${k}" in config: use true or false (got ${JSON.stringify(merged[k])}).`);
   }
   if (typeof merged.showThinking !== 'boolean') throw new Error(`Invalid "showThinking" in config: use true or false (got ${JSON.stringify(merged.showThinking)}).`);
+  if (typeof merged.sessionRetentionDays !== 'number' || !Number.isFinite(merged.sessionRetentionDays) || merged.sessionRetentionDays < 0) {
+    throw new Error(`Invalid "sessionRetentionDays" in config: use a number of days (0 = keep sessions forever, got ${JSON.stringify(merged.sessionRetentionDays)}).`);
+  }
   if (typeof merged.thinkingAuto !== 'boolean') throw new Error(`Invalid "thinkingAuto" in config: use true or false (got ${JSON.stringify(merged.thinkingAuto)}).`);
   if (typeof merged.thinking !== 'boolean') throw new Error(`Invalid "thinking" in config: use true or false (got ${JSON.stringify(merged.thinking)}).`);
   if (!THINKING_LEVELS.includes(merged.thinkingLevel)) {
@@ -232,6 +238,7 @@ export const DEFAULT_CONFIG_FILE = {
   thinkingLevel: 'medium',
   showThinking: true,
   permissionMode: 'default',
+  sessionRetentionDays: 0, // days a session may sit untouched before it is deleted; 0 = keep forever
   mcpServers: DEFAULT_MCP_SERVERS,
 };
 

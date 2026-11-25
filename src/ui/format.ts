@@ -140,7 +140,9 @@ export function formatClock(at: Date = new Date()): string {
 }
 
 export function formatUsage(u: Usage): string {
-  return `${formatTokens(u.inputTokens)} in (${formatTokens(u.cacheReadTokens)} cached) · ${formatTokens(u.outputTokens)} out · $${u.cost.toFixed(4)}`;
+  // The share of input that came from the prompt cache — a sudden drop there is the reason a turn feels slow.
+  const hit = u.inputTokens > 0 ? ` · ${Math.round((u.cacheReadTokens / u.inputTokens) * 100)}%` : '';
+  return `${formatTokens(u.inputTokens)} in (${formatTokens(u.cacheReadTokens)} cached${hit}) · ${formatTokens(u.outputTokens)} out · $${u.cost.toFixed(4)}`;
 }
 
 /** Current git branch (short commit hash when detached), or undefined outside a repository. */

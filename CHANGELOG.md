@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.7.24 — 2026-11-20
+
+### Added
+- **Session retention.** The new `sessionRetentionDays` in `config.json` deletes sessions untouched for that many
+  days; `0` (the default) keeps everything forever, so nothing changes until you set it. Applied at startup and
+  when `/sessions` is listed — never the current or resumed session, never blocking startup.
+- `/sessions` numbers its rows (the current one marked) and `/sessions remove <n>` deletes one.
+- The turn summary shows the prompt-cache share of the input (`5.7M in (5.7M cached · 100%)`): a turn that went
+  cold shows up in the line instead of being felt as unexplained slowness.
+- `/doctor` reports the compaction-quality log (count, average and max reads after each compaction) and how many
+  memos the current session holds.
+
 ## 0.7.23 — 2026-11-20
 
 ### Added

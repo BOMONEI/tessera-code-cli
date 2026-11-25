@@ -1,4 +1,4 @@
-import { access, constants, mkdir } from 'node:fs/promises';
+import { access, constants, mkdir, readFile } from 'node:fs/promises';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -101,6 +101,11 @@ export async function runDoctor(app: App): Promise<Check[]> {
   const clip = process.platform === 'win32' ? has('clip') : process.platform === 'darwin' ? has('pbcopy') : has('wl-copy') || has('xclip') || has('xsel');
   checks.push({ ok: clip ? true : 'warn', name: 'Clipboard', detail: clip ? 'available for /copy' : 'no clipboard tool; /copy falls back to OSC 52' });
 
+  const compaction = await compactionStats();
+  checks.push({ ok: true, name: 'Compaction', detail: compaction ?? 'none logged yet (the log is ~/.tessera-code/compaction-log.jsonl)' });
+  const memos = app.memos().length;
+  checks.push({ ok: true, name: 'Session memos', detail: memos ? `${memos} memo${memos > 1 ? 's' : ''} in this session (/memo)` : 'none in this session' });
+
   checks.push(copyOnSelect());
 
   const editor = process.env.VISUAL ?? process.env.EDITOR;
@@ -112,6 +117,27 @@ export async function runDoctor(app: App): Promise<Check[]> {
  * Copying output by dragging over it is the terminal's job: printed output lives in the terminal's scrollback,
  * where the app cannot see the selection. Reports whether this terminal copies a selection by itself.
  */
+/** Totals from the compaction-quality log the app writes after compacting turns. */
+async function compactionStats(): Promise<string | undefined> {
+  try {
+    const raw = await readFile(join(HOME_DIR, 'compaction-log.jsonl'), 'utf8');
+    const reads: number[] = [];
+    for (const line of raw.split('\n')) {
+      try {
+        const e = JSON.parse(line) as { reads?: unknown };
+        if (typeof e.reads === 'number') reads.push(e.reads);
+      } catch {
+        // skip broken lines
+      }
+    }
+    if (!reads.length) return undefined;
+    const avg = reads.reduce((a, b) => a + b, 0) / reads.length;
+    return `${reads.length} compaction${reads.length > 1 ? 's' : ''} logged · avg ${avg.toFixed(1)} reads after each (max ${Math.max(...reads)})`;
+  } catch {
+    return undefined;
+  }
+}
+
 export function copyOnSelect(env = process.env, home = homedir(), platform = process.platform): Check {
   const name = 'Copy on select';
   switch (env.TERM_PROGRAM) {

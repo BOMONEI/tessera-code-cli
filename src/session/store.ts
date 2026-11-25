@@ -1,4 +1,4 @@
-import { appendFile, copyFile, mkdir, open, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises';
+import { appendFile, copyFile, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
@@ -375,6 +375,26 @@ export class SessionStore {
     }
     if (changed) await writeAtomic(indexPath, JSON.stringify(index)).catch(() => {});
     return out;
+  }
+
+  /** Deletes a session's file and its file snapshots; the index is cleaned by the next list(). */
+  static async remove(cwd: string, id: string): Promise<void> {
+    const dir = projectDir(cwd);
+    await rm(join(dir, `${id}.jsonl`), { force: true });
+    await rm(join(dir, `${id}.files`), { recursive: true, force: true });
+  }
+
+  /** Deletes sessions untouched for `days` days; `keep` (current session ids) is never touched. Returns the deleted ids. */
+  static async prune(cwd: string, days: number, keep: string[] = []): Promise<string[]> {
+    if (days <= 0) return []; // 0 (the default) keeps everything forever
+    const cutoff = Date.now() - days * 86_400_000;
+    const deleted: string[] = [];
+    for (const s of await SessionStore.list(cwd, 10_000)) {
+      if (keep.includes(s.id) || s.updatedAt.getTime() >= cutoff) continue;
+      await SessionStore.remove(cwd, s.id);
+      deleted.push(s.id);
+    }
+    return deleted;
   }
 
   /** The session `id` names: an exact id, else the newest session whose id starts with it (no session is parsed). */

@@ -634,10 +634,29 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
   },
   {
     name: 'sessions',
-    description: 'list sessions in this directory',
-    async run(app) {
-      const list = await SessionStore.list(app.ctx.cwd);
-      return { output: list.slice(0, 15).map((s) => `${s.id === app.agent.sessionId ? '●' : ' '} ${s.id.slice(0, 8)}  ${ago(s.updatedAt).padEnd(9)} ${String(s.messages).padStart(4)} msgs  ${s.title}`).join('\n') || 'No sessions.' };
+    description: 'list sessions in this directory; delete one with /sessions remove <n>',
+    async run(app, arg) {
+      const pruned = await app.pruneSessions(); // apply the retention window first, so the list is the truth
+      const list = (await SessionStore.list(app.ctx.cwd)).slice(0, 15);
+      const removal = /^remove\s+(\d+)$/i.exec(arg.trim());
+      if (removal) {
+        const i = Number(removal[1]) - 1;
+        const target = list[i];
+        if (!target) return { output: `No session ${removal[1]}. Usage: /sessions remove <n> — see the numbers in /sessions.` };
+        if (target.id === app.agent.sessionId) return { output: 'That is the session you are in; it cannot be removed. (/new starts a fresh one.)' };
+        await SessionStore.remove(app.ctx.cwd, target.id);
+        return { output: `Removed ${target.id.slice(0, 8)}${target.title ? ` "${target.title}"` : ''} (${target.messages} msgs).` };
+      }
+      const lines = list.map((s, i) => `${s.id === app.agent.sessionId ? '●' : ' '}${String(i + 1).padStart(2)}. ${s.id.slice(0, 8)}  ${ago(s.updatedAt).padEnd(9)} ${String(s.messages).padStart(4)} msgs  ${s.title}`);
+      return {
+        output: [
+          pruned.length ? `Deleted ${pruned.length} session(s) past the retention window ("sessionRetentionDays" in config; 0 keeps everything).` : '',
+          lines.join('\n') || 'No sessions.',
+          list.length ? 'Remove one: /sessions remove <n>' : '',
+        ]
+          .filter(Boolean)
+          .join('\n'),
+      };
     },
   },
   {

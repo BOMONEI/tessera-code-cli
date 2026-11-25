@@ -125,3 +125,36 @@ describe('/memo — per-session memories', () => {
     await expect(runCommand(memoApp, '/memo remove 5')).rejects.toThrow(/No memo 5/);
   });
 });
+
+describe('/sessions', async () => {
+  const { SessionStore } = await import('../src/session/store.js');
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+
+  it('numbers the list, removes a session, and refuses the current one', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'sess-cmd-'));
+    const a = new SessionStore(cwd, 'sess-aaaa');
+    await a.setTitle('first session');
+    const b = new SessionStore(cwd, 'sess-bbbb');
+    await b.setTitle('second session');
+    const app2 = {
+      ...app,
+      ctx: { cwd },
+      agent: { ...app.agent, sessionId: 'sess-bbbb' },
+      pruneSessions: async () => [],
+    } as unknown as App;
+    const list = await runCommand(app2, '/sessions');
+    const lineFor = (id8: string) => (list.output ?? '').split('\n').find((l) => l.includes(id8))!;
+    // The order of equal-mtime files is the filesystem's, so the numbers are read from the list, not assumed.
+    const num = (id8: string) => Number(lineFor(id8).trim().replace(/^\D+/, '').split('.')[0]); // the current row starts with ●
+    expect(lineFor('sess-aaa')).toBeDefined();
+    expect(lineFor('sess-bbb')).toContain('●'); // the current one is marked
+    const refused = await runCommand(app2, `/sessions remove ${num('sess-bbb')}`);
+    expect(refused.output).toContain('session you are in');
+    const removed = await runCommand(app2, `/sessions remove ${num('sess-aaa')}`);
+    expect(removed.output).toContain('Removed sess-aaa');
+    expect((await runCommand(app2, '/sessions')).output).not.toContain('sess-aaa');
+    expect((await runCommand(app2, '/sessions remove 9')).output).toContain('No session 9');
+  });
+});
