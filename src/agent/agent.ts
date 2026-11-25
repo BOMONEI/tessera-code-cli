@@ -23,7 +23,7 @@ export type AgentEvent =
    * `outputMs`: time the model spent writing, summed over the steps (output tokens / outputMs = generation speed).
    * `discarded`: interrupted before the model answered anything; the prompt was left out of the history.
    */
-  | { type: 'turn-finish'; usage: Usage; finishReason: string; elapsedMs: number; firstOutputMs?: number; outputMs?: number; discarded?: boolean }
+  | { type: 'turn-finish'; usage: Usage; finishReason: string; elapsedMs: number; firstOutputMs?: number; outputMs?: number; discarded?: boolean; readsAfterCompaction?: number }
   | { type: 'compacted'; before: number; summary: string }
   | { type: 'fallback'; from: string; to: string; reason: string }
   | { type: 'info'; text: string }
@@ -227,6 +227,8 @@ export class Agent {
   readonly total: Usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cost: 0 };
   /** The running turn's usage, so subagents' spend shows in the turn's summary too. */
   private turnUsage?: Usage;
+  /** Compaction-quality sample of the running turn: compactions it had and `read` calls that followed each. */
+  private compactionSample = { compactions: 0, reads: 0 };
   /** Prompt size of the most recent LLM call: the current context window usage. */
   contextTokens = 0;
   /** Reasoning on/off; applies from the next LLM call. */
@@ -429,6 +431,9 @@ export class Agent {
     const startedAt = performance.now();
     let firstOutputAt: number | undefined;
     this.toolImages = []; // anything left from an earlier turn (it ended before another step) is stale
+    // Compaction-quality sample: how often the model reaches for `read` in the turn right after a compaction.
+    // A high number says the tail/summary did not carry enough context; logged by the app for tuning.
+    this.compactionSample = { compactions: 0, reads: 0 };
     if (images.length && !this.model.images) {
       yield { type: 'error', message: `${this.model.id} cannot read images. Switch to a model that can (e.g. /model mimo-v2.6-flash) or remove the image.` };
       return;
@@ -446,7 +451,7 @@ export class Agent {
       if (this.contextTokens + incoming >= this.contextLimit) {
         try {
           const summary = await this.compact(undefined, signal);
-          yield { type: 'compacted', before, summary };
+          this.compactionSample.compactions++;          yield { type: 'compacted', before, summary };
         } catch (e) {
           yield { type: 'error', message: `Auto-compaction failed: ${errorMessage(e)}` };
         }
@@ -569,6 +574,7 @@ export class Agent {
                   ? [...compactedHistory(r.summary), ...tail]
                   : [...compactedHistory(r.summary), { role: 'user', content: CONTINUE_AFTER_COMPACTION }];
                 notices.push({ type: 'compacted', before: estimate, summary: r.summary });
+                this.compactionSample.compactions++;
               }
               history = rebuilt;
               completed = [];
@@ -660,6 +666,7 @@ export class Agent {
               yield { type: 'tool-call', id: part.toolCallId, name: part.toolName, input: part.input };
               break;
             case 'tool-result':
+              if (this.compactionSample.compactions && part.toolName === 'read') this.compactionSample.reads++;
               yield { type: 'tool-result', id: part.toolCallId, name: part.toolName, output: part.output, isError: false };
               break;
             case 'tool-error':
@@ -686,6 +693,7 @@ export class Agent {
                 elapsedMs: performance.now() - startedAt,
                 firstOutputMs: firstOutputAt === undefined ? undefined : firstOutputAt - startedAt,
                 outputMs,
+                ...(this.compactionSample.compactions ? { readsAfterCompaction: this.compactionSample.reads } : {}),
               };
               break;
             case 'error':
@@ -738,6 +746,7 @@ export class Agent {
         firstOutputMs: firstOutputAt === undefined ? undefined : firstOutputAt - startedAt,
         outputMs,
         ...(discarded ? { discarded } : {}),
+        ...(this.compactionSample.compactions ? { readsAfterCompaction: this.compactionSample.reads } : {}),
       };
     }
     if (discarded) return;
@@ -758,6 +767,7 @@ export class Agent {
         if (this.contextTokens >= this.contextLimit) {
           try {
             const summary = await this.compact(undefined, signal);
+            this.compactionSample.compactions++;
             yield { type: 'compacted', before, summary };
           } catch (e) {
             if (!signal?.aborted) yield { type: 'error', message: `Auto-compaction failed: ${errorMessage(e)}` };

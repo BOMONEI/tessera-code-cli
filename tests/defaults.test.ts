@@ -32,13 +32,13 @@ describe('built-in exa MCP server', () => {
   it('is loaded even when the config does not list it, next to the user\'s own servers', async () => {
     writeFileSync(GLOBAL_CONFIG, JSON.stringify({ mcpServers: { mine: { command: 'my-mcp' } } }));
     const servers = (await loadConfig(project(), { trusted: false })).mcpServers;
-    expect(Object.keys(servers).sort()).toEqual(['exa', 'mine']);
+    expect(Object.keys(servers).sort()).toEqual(['exa', 'mine', 'parallel-search']);
   });
 
   it('is added to an existing config.json without touching other servers or a customized exa', async () => {
     writeFileSync(GLOBAL_CONFIG, JSON.stringify({ model: 'x', mcpServers: { mine: { command: 'my-mcp' } } }));
     await ensureGlobalDefaults();
-    expect(config().mcpServers).toEqual({ mine: { command: 'my-mcp' }, exa: DEFAULT_MCP_SERVERS.exa });
+    expect(config().mcpServers).toEqual({ mine: { command: 'my-mcp' }, exa: DEFAULT_MCP_SERVERS.exa, 'parallel-search': DEFAULT_MCP_SERVERS['parallel-search'] });
     writeFileSync(GLOBAL_CONFIG, JSON.stringify({ apiKey: '', mcpServers: { exa: { url: 'https://mcp.exa.ai/mcp?exaApiKey=x' } } }));
     await ensureGlobalDefaults();
     expect(config().mcpServers.exa).toEqual({ url: 'https://mcp.exa.ai/mcp?exaApiKey=x' });

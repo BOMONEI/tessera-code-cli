@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { appendFile, readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { ToolSet } from 'ai';
 import { HOME_DIR, THINKING_LEVELS, addProjectAllowRule, loadConfig, projectTrust, resolveApiKey, saveGlobalSetting, trustProject, type Config, type ThinkingLevel } from './config.js';
 import { loadCatalog, findModel, isAllowedModel, isZdr, modelIsZdr, type ModelInfo } from './providers/catalog.js';
@@ -106,6 +107,13 @@ export interface App {
 
 /** How long a turn waits for MCP servers that are still connecting (exa usually connects in ~0.6 s). */
 const MCP_TURN_WAIT_MS = 1500;
+
+/** Appends the compaction-quality sample (reads in the turn right after a compaction) to
+ *  ~/.tessera-code/compaction-log.jsonl, so the tail budget can be tuned from real sessions. Best effort. */
+function logCompactionSample(sessionId: string, reads: number): void {
+  const line = `${JSON.stringify({ at: new Date().toISOString(), sessionId, reads })}\n`;
+  void appendFile(join(HOME_DIR, 'compaction-log.jsonl'), line, { mode: 0o600, flag: 'a' }).catch(() => {});
+}
 
 /** Shown when a model that may keep data is in use (startup, /model). */
 export function nonZdrWarning(model: Pick<ModelInfo, 'id' | 'provider'>): string {
@@ -497,6 +505,8 @@ export async function createApp(opts: AppOptions): Promise<App> {
             out = { ...ev, elapsedMs: ev.elapsedMs + waited, firstOutputMs: ev.firstOutputMs === undefined ? undefined : ev.firstOutputMs + waited };
             // The timing line is remembered, so resuming the session shows it again.
             if (!ev.discarded) summary = out;
+            // Compaction-quality sample (readsAfterCompaction) is logged for tuning the tail budget.
+            if (ev.readsAfterCompaction !== undefined) logCompactionSample(sessionId, ev.readsAfterCompaction);
           }
           yield out;
         }

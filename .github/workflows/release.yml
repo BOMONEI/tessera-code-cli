@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: write
+  issues: write
 
 jobs:
   release:
@@ -55,3 +56,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" out/* --title "tessera-code ${GITHUB_REF_NAME#v}" --notes-file notes.md
+
+      - name: File an issue when the release failed
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create --title "release ${{ github.ref_name }} failed" --label release \
+            --body "The release run failed: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID} — the tag ${{ github.ref_name }} has no release; fix the cause, then delete and re-push the tag."

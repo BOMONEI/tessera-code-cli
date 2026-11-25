@@ -29,6 +29,21 @@ Then run `tessera-code` (or just `tessera`) in a project folder and register you
   checkout (`npm link`) is pointed at `git pull && npm ci && npm run build` instead of being replaced.
 - A specific version: `curl -fsSL …/install.sh | TESSERA_VERSION=0.3.0 bash`. Remove: `npm uninstall -g tessera-code`.
 
+### Windows
+
+There is no installer script (it is bash-only); install with npm and check the requirements afterwards:
+
+```powershell
+npm install -g C:\path\to\tessera-code-0.7.19.tgz   # from github.com/BOMONEI/tessera-code-cli/releases
+tessera doctor
+```
+
+- The bash tool prefers **Git Bash** (Git for Windows) and falls back to `cmd.exe`; `/doctor` says which one it
+  found. `tessera update` installs the SHA-verified release tarball through npm on Windows too.
+- LibreOffice is needed to view slides, PDFs and documents as images: `winget install TheDocumentFoundation.LibreOffice`.
+- ripgrep makes `grep` fast: `winget install BurntSushi.ripgrep.MSVC`. Windows Terminal is recommended (legacy
+  conhost misses mouse, tab title and notification sequences).
+
 ## Build from source
 
 ```bash

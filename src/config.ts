@@ -1,4 +1,5 @@
 import { chmod, readFile, mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -80,6 +81,7 @@ export type McpServerConfig = { type?: 'local' | 'remote'; enabled?: boolean } &
 /** MCP servers every install has (web search). Listed in config.json; "enabled": false there turns one off. */
 export const DEFAULT_MCP_SERVERS: Record<string, McpServerConfig> = {
   exa: { type: 'remote', url: 'https://mcp.exa.ai/mcp', enabled: true },
+  'parallel-search': { type: 'remote', url: 'https://search.parallel.ai/mcp', enabled: true },
 };
 
 const DEFAULTS: Config = {
@@ -345,6 +347,10 @@ async function writeGlobalConfig(json: Record<string, unknown>): Promise<void> {
   await writeFile(tmp, JSON.stringify(json, null, 2) + '\n', { mode: 0o600 });
   await rename(tmp, GLOBAL_CONFIG);
   await chmod(GLOBAL_CONFIG, 0o600);
+  // Windows ignores chmod: instead of the user profile's inherited ACLs, only the owner keeps any access.
+  if (process.platform === 'win32') {
+    execFile('icacls', [GLOBAL_CONFIG, '/inheritance:r', '/grant:r', `${process.env.USERNAME ?? 'everyone'}:F`], () => {});
+  }
 }
 
 /**

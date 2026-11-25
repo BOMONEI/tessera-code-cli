@@ -7,6 +7,7 @@ import type { App } from './app.js';
 import { BASE_URL, HOME_DIR } from './config.js';
 import { findModel, modelIsZdr } from './providers/catalog.js';
 import { apiFetch } from './providers/net.js';
+import { shellPrefix } from './shellpath.js';
 
 export interface Check {
   ok: boolean | 'warn';
@@ -72,6 +73,15 @@ export async function runDoctor(app: App): Promise<Check[]> {
     // not a repository
   }
   checks.push({ ok: has('git') ? true : 'warn', name: 'git', detail: has('git') ? git : 'git not installed (file list and branch info disabled)' });
+
+  if (process.platform === 'win32') {
+    const shell = await shellPrefix();
+    checks.push(
+      shell.label === 'bash'
+        ? { ok: true, name: 'Shell (bash tool)', detail: `bash at ${shell.argv[0]} — commands run with bash semantics` }
+        : { ok: 'warn', name: 'Shell (bash tool)', detail: 'no Git Bash found: commands run in cmd.exe; install Git for Windows so bash works' },
+    );
+  }
 
   const settings = join(app.ctx.cwd, '.tessera', 'settings.json');
   checks.push({

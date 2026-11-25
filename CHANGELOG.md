@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.7.20 — 2026-11-20
+
+### Added
+- **parallel-search** (`https://search.parallel.ai/mcp`) ships as a second built-in search MCP server next to exa;
+  the system prompt says to retry a search there when exa fails, times out or is not connected. A user's own
+  config entry wins, `"enabled": false` turns it off.
+- **Windows finishing touches**: `/doctor` says which interpreter the bash tool resolved (Git Bash path, or the
+  `cmd.exe` fallback with a pointer to Git for Windows); config.json is restricted to its owner with icacls where
+  chmod is ignored; the README gains a Windows section (npm install from the release tarball, winget LibreOffice
+  and ripgrep, Windows Terminal recommended).
+- Compaction quality is logged: a turn that compacted reports how many `read` calls followed, appended to
+  `~/.tessera-code/compaction-log.jsonl` — data for tuning the verbatim-tail budget.
+
+### Fixed
+- The VS Code copy-on-select check no longer fails on Linux (it looked in the macOS settings folder) — this broke
+  the 0.7.18 release build.
+
 ## 0.7.19 — 2026-11-20
 
 ### Changed
