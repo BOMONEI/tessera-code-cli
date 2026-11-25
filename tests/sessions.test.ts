@@ -312,3 +312,17 @@ describe('lastAnswer with interjections', async () => {
     expect(lastAnswer(messages)).toBe('first\n\nsecond');
   });
 });
+
+describe('per-session memos', () => {
+  it('persists memos across load and keeps them when the history resets', async () => {
+    const store = new SessionStore(mkdtempSync(join(tmpdir(), 'tessera-memos-')), 'memo-session');
+    await store.addMemo('use pnpm, not npm');
+    await store.addMemo('the user prefers Korean answers');
+    await store.removeMemo(0);
+    const loaded = await store.load();
+    expect(loaded.memos).toEqual(['the user prefers Korean answers']);
+    // A history reset (compaction, /clear of the history) keeps the user's own notes.
+    const again = parseSession(readFileSync(store.path, 'utf8').replace(/"type":"messages".*\n/g, ''));
+    expect(again.memos).toEqual(['the user prefers Korean answers']);
+  });
+});

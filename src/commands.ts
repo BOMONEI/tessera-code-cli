@@ -533,6 +533,26 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
     },
   },
   {
+    name: 'memo',
+    description: 'save a note for this session: /memo <text> · list: /memo · remove: /memo remove <n> (rides every prompt)',
+    argHint: '[<text> | remove <n>]',
+    async run(app, arg) {
+      const list = () => app.memos().map((m, i) => `  ${i + 1}. ${m.replace(/\n/g, ' ')}`);
+      const removal = /^remove\s+(\d+)$/i.exec(arg.trim());
+      if (removal) {
+        await app.removeMemo(Number(removal[1]) - 1);
+        const left = app.memos();
+        return { output: left.length ? `Removed. ${left.length} left:\n${list().join('\n')}` : 'Removed. No memos left.' };
+      }
+      if (arg.trim()) {
+        await app.addMemo(arg.trim());
+        return { output: `Memorized for this session (rides every prompt):\n  ${app.memos().length}. ${arg.trim().replace(/\n/g, ' ')}` };
+      }
+      const memos = app.memos();
+      return { output: memos.length ? `Session memories (${memos.length}):\n${list().join('\n')}\n\nRemove: /memo remove <n>` : 'No memos in this session yet. Save one: /memo <text>' };
+    },
+  },
+  {
     name: 'context',
     description: 'show context window usage',
     async run(app) {

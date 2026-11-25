@@ -18,6 +18,8 @@ export interface ToolContext {
   canSeeImages?: () => boolean;
   /** Skills usable in this session (global, Claude's, and the project's own when it is trusted). */
   skills?: () => Promise<Skill[]>;
+  /** Saves a per-session memory note (/memo); the memo tool writes here. */
+  addMemo?: (text: string) => Promise<void>;
 }
 
 export function resolvePath(ctx: ToolContext, p: string): string {

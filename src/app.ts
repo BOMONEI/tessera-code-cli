@@ -26,6 +26,7 @@ import { HookRunner } from './hooks.js';
 import { connectMcp, type McpConnection, type McpServerStatus } from './mcp.js';
 import type { ToolContext } from './tools/context.js';
 import { fileTools } from './tools/files.js';
+import { memoTools } from './tools/memo.js';
 import { searchTools } from './tools/search.js';
 import { shellTools } from './tools/shell.js';
 
@@ -89,6 +90,10 @@ export interface App {
   saveState(): Promise<void>;
   /** Finished turns' timing summaries (⏱ …); restored on resume. */
   summaries(): Array<{ index: number; text: string }>;
+  /** Per-session memory notes (/memo); injected into every prompt. */
+  memos(): string[];
+  addMemo(text: string): Promise<void>;
+  removeMemo(index: number): Promise<void>;
   /** The OpenCode Go server's own usage (percent per window); undefined for other providers or when unreachable. */
   goUsage(): Promise<GoUsage | undefined>;
   /** Live tail of a background subagent (the panel viewer); undefined when the id is unknown. */
@@ -172,7 +177,7 @@ export function guardTools(tools: ToolSet, hooks: HookRunner, permissions: Permi
 }
 
 export function buildTools(ctx: ToolContext): ToolSet {
-  return { ...fileTools(ctx), ...searchTools(ctx), ...shellTools(ctx), ...skillTools(ctx) };
+  return { ...fileTools(ctx), ...searchTools(ctx), ...shellTools(ctx), ...skillTools(ctx), ...memoTools(ctx) };
 }
 
 export async function createApp(opts: AppOptions): Promise<App> {
@@ -242,6 +247,7 @@ export async function createApp(opts: AppOptions): Promise<App> {
   // Skills are looked up when used, so ones installed or edited meanwhile are picked up; the project's own only when trusted.
   const listSkills = (): Promise<Skill[]> => discoverSkills({ home: HOME_DIR, cwd: opts.cwd, projectTrusted: trusted }).catch(() => []);
   ctx.skills = listSkills;
+  ctx.addMemo = (text) => store.addMemo(text);
   const hooks = new HookRunner(config.hooks, opts.cwd, sessionId);
   const base = guardTools(buildTools(ctx), hooks, permissions);
   // Subagents (task tool) when "subagents" or "multiAgent" is on; multi-agent lets up to 4 run at once.
@@ -293,8 +299,10 @@ export async function createApp(opts: AppOptions): Promise<App> {
       const shell = pendingShell.length ? `Commands the user ran in the terminal:\n${pendingShell.splice(0).join('\n\n')}` : undefined;
       const reportList = pendingReports.splice(0);
       const reports = reportList.length ? `Reports from your background subagents:\n\n${reportList.join('\n\n')}` : undefined;
+      // Session memories: the user saved these with /memo; they ride every prompt of this session.
+      const memoList = store.memos.length ? `Session memories (the user saved these notes; keep them in mind):\n${store.memos.map((m) => `- ${m}`).join('\n')}` : undefined;
       return {
-        context: [hook.context, shell, reports, files.context].filter(Boolean).join('\n\n') || undefined,
+        context: [hook.context, shell, reports, memoList, files.context].filter(Boolean).join('\n\n') || undefined,
         notes: [...files.notes, ...(reportList.length ? [`${reportList.length} background subagent report${reportList.length === 1 ? '' : 's'} arrived and were folded into this prompt`] : [])],
       };
     },
@@ -544,6 +552,9 @@ export async function createApp(opts: AppOptions): Promise<App> {
     },
     saveState,
     summaries: () => store.summaries,
+    memos: () => store.memos,
+    addMemo: (text) => store.addMemo(text),
+    removeMemo: (index) => store.removeMemo(index),
     // Real usage only for Go models: the allowance is theirs to spend; other providers have no such endpoint.
     goUsage: () => (!agent.model.provider && agent.apiKey ? fetchGoUsage(agent.apiKey) : Promise.resolve(undefined)),
     subagentTail: (id) => subagentTailTool(id),

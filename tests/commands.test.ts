@@ -99,3 +99,29 @@ describe('/resume by title', () => {
     expect(none.output).toBe('No session matching "quantum" — Run /resume to pick one.');
   });
 });
+
+describe('/memo — per-session memories', () => {
+  const memos: string[] = [];
+  const memoApp = {
+    ...app,
+    memos: () => memos,
+    addMemo: async (t: string) => void memos.push(t),
+    removeMemo: async (i: number) => {
+      if (i < 0 || i >= memos.length) throw new Error(`No memo ${i + 1}.`);
+      memos.splice(i, 1);
+    },
+  } as unknown as App;
+
+  it('saves, lists and removes memos', async () => {
+    expect((await runCommand(memoApp, '/memo')).output).toContain('No memos');
+    await runCommand(memoApp, '/memo use pnpm, not npm in this repo');
+    await runCommand(memoApp, '/memo the user prefers Korean answers');
+    const list = await runCommand(memoApp, '/memo');
+    expect(list.output).toContain('2.');
+    expect(list.output).toContain('use pnpm, not npm');
+    const removed = await runCommand(memoApp, '/memo remove 1');
+    expect(removed.output).toContain('Removed');
+    expect((await runCommand(memoApp, '/memo')).output).not.toContain('pnpm');
+    await expect(runCommand(memoApp, '/memo remove 5')).rejects.toThrow(/No memo 5/);
+  });
+});

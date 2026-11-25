@@ -49,7 +49,10 @@ type Record =
   /** Drops checkpoints from `turn` on (after a rewind). */
   | { type: 'rewind'; turn: number }
   /** A finished turn's timing line (⏱ …); `index` is the history length after that turn. */
-  | { type: 'turn-summary'; index: number; text: string; at: string };
+  | { type: 'turn-summary'; index: number; text: string; at: string }
+  /** A per-session memory note the user saved with /memo. */
+  | { type: 'memo'; text: string; at: string }
+  | { type: 'memo-remove'; index: number };
 
 export interface SessionSummary {
   id: string;
@@ -67,6 +70,8 @@ export interface LoadedSession {
   checkpoints: Checkpoint[];
   /** Finished turns' timing lines (⏱ …), anchored to the history length after each turn. */
   summaries: Array<{ index: number; text: string }>;
+  /** Per-session memory notes (/memo), kept across history resets. */
+  memos: string[];
 }
 
 const BLOB_REF = 'tessera-blob:';
@@ -114,7 +119,7 @@ export function promptText(m: ModelMessage): string {
 }
 
 export function parseSession(raw: string): LoadedSession {
-  const out: LoadedSession = { messages: [], checkpoints: [], summaries: [] };
+  const out: LoadedSession = { messages: [], checkpoints: [], summaries: [], memos: [] };
   for (const line of raw.split('\n')) {
     const rec = parseLine(line);
     if (!rec) continue;
@@ -145,6 +150,12 @@ export function parseSession(raw: string): LoadedSession {
       case 'turn-summary':
         out.summaries.push({ index: rec.index, text: rec.text });
         break;
+      case 'memo':
+        out.memos.push(rec.text);
+        break;
+      case 'memo-remove':
+        out.memos = out.memos.filter((_, i) => i !== rec.index);
+        break;
     }
   }
   return out;
@@ -156,6 +167,8 @@ export class SessionStore {
   readonly blobDir: string;
   /** Finished turns' timing lines, kept current by load(), addSummary() and sync()'s reset branch. */
   summaries: Array<{ index: number; text: string }> = [];
+  /** Per-session memory notes (/memo); user-saved, so they survive history resets. */
+  memos: string[] = [];
   private savedCount = 0;
   private savedGeneration = 0;
   private savedState = '';
@@ -228,6 +241,18 @@ export class SessionStore {
     await this.append({ type: 'rewind', turn });
   }
 
+  /** Saves a memory note (/memo) for this session. */
+  async addMemo(text: string): Promise<void> {
+    this.memos = [...this.memos, text];
+    await this.append({ type: 'memo', text, at: new Date().toISOString() });
+  }
+
+  async removeMemo(index: number): Promise<void> {
+    if (index < 0 || index >= this.memos.length) throw new Error(`No memo ${index + 1}.`);
+    this.memos = this.memos.filter((_, i) => i !== index);
+    await this.append({ type: 'memo-remove', index });
+  }
+
   /** Remembers a finished turn's timing line (⏱ …) so a resumed session can show it again. */
   async addSummary(index: number, text: string): Promise<void> {
     this.summaries = [...this.summaries, { index, text }];
@@ -249,9 +274,10 @@ export class SessionStore {
 
   /** Reads the whole session. Call adopt() once the agent holds the loaded history. */
   async load(): Promise<LoadedSession> {
-    const loaded = existsSync(this.path) ? parseSession(await readFile(this.path, 'utf8')) : { messages: [], checkpoints: [], summaries: [] };
+    const loaded = existsSync(this.path) ? parseSession(await readFile(this.path, 'utf8')) : { messages: [], checkpoints: [], summaries: [], memos: [] };
     if (loaded.state) this.savedState = JSON.stringify(loaded.state);
     this.summaries = loaded.summaries;
+    this.memos = loaded.memos;
     loaded.messages = await this.rehydrate(loaded.messages);
     return loaded;
   }

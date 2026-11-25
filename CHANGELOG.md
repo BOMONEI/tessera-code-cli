@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.7.23 — 2026-11-20
+
+### Added
+- **Session memory.** `/memo <text>` saves a note to the current session (persisted with the session file, kept
+  across history resets, restored on resume), `/memo` lists, `/memo remove <n>` deletes — and saved notes ride
+  every prompt of the session. The agent itself can save: when you ask it to remember something ("remember this",
+  "메모리에 저장해줘"), it calls the new memo tool, and the note comes back with every later prompt.
+- The test suite now runs on GitHub Actions on every push, on Linux and Windows — and it is green on both.
+
+### Fixed
+- Windows CI: the runner's 8.3 short cwd refused every @-attachment as outside the project (the symlink-escape
+  check compared two path spellings); dragged-path unescaping ate Windows backslashes; skill file lists use
+  forward slashes; the update tests no longer spawn a real npm install on the tarball path.
+
 ## 0.7.22 — 2026-11-20
 
 ### Added
