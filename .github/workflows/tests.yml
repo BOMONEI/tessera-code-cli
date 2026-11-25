@@ -10,6 +10,7 @@ on:
     branches: [main]
 
 permissions:
+  contents: read
   issues: write
 
 defaults:
@@ -40,4 +41,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh issue create --title "tests: ${GITHUB_JOB} failed on ${GITHUB_SHA::7}" \
-            --body "$(tail -150 test-output.log | tail -c 40000)" --label tests
+            --body "$(tail -150 test-output.log 2>/dev/null | tail -c 40000 || echo 'no test output — the failure was before the test step')" \
+            --label tests
