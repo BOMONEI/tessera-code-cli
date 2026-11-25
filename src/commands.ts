@@ -543,26 +543,67 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
     },
   },
   {
+    name: 'stats',
+    description: 'compaction quality: reads the model needed right after each compaction',
+    async run() {
+      const entries: Array<{ at: string; sessionId: string; reads: number }> = [];
+      try {
+        for (const line of (await readFile(join(HOME_DIR, 'compaction-log.jsonl'), 'utf8')).split('\n')) {
+          try {
+            const e = JSON.parse(line) as { at?: string; sessionId?: string; reads?: unknown };
+            if (typeof e.reads === 'number' && typeof e.at === 'string' && typeof e.sessionId === 'string') entries.push(e as { at: string; sessionId: string; reads: number });
+          } catch {
+            // skip broken lines
+          }
+        }
+      } catch {
+        return { output: 'No compactions logged yet.' };
+      }
+      if (!entries.length) return { output: 'No compactions logged yet.' };
+      const reads = entries.map((e) => e.reads).sort((a, b) => a - b);
+      const counts: number[] = [...new Set(reads)];
+      const dist = counts.map((n) => `${n}×${reads.filter((x) => x === n).length}`).join(', ');
+      const avg = reads.reduce((a, b) => a + b, 0) / reads.length;
+      const mid = Math.floor(reads.length / 2);
+      const median = reads.length % 2 ? reads[mid]! : (reads[mid - 1]! + reads[mid]!) / 2;
+      const fmt = (n: number) => (n % 1 ? n.toFixed(1) : String(n));
+      const recent = [...entries].sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime()).slice(0, 5)
+        .map((e) => `${ago(e.at)} · ${e.sessionId.slice(0, 8)} · ${e.reads} reads`);
+      const sessions = new Set(entries.map((e) => e.sessionId)).size;
+      return {
+        output: [
+          `${entries.length} compaction${entries.length > 1 ? 's' : ''} logged across ${sessions} session${sessions > 1 ? 's' : ''}`,
+          `reads after compaction: ${dist}`,
+          `average ${avg.toFixed(1)} · median ${fmt(median)}`,
+          ...recent,
+        ].join('\n'),
+      };
+    },
+  },
+  {
     name: 'resume',
     description: 'continue an earlier session of this directory',
-    argHint: '[id]',
+    argHint: '[id or title]',
     async run(app, arg) {
       const list = (await SessionStore.list(app.ctx.cwd)).filter((x) => x.id !== app.agent.sessionId);
+      const pick = (x: typeof list[number]) => ({ label: oneLine(x.title, 60), hint: `${ago(x.updatedAt)} · ${x.messages} msgs${x.model ? ` · ${x.model}` : ''} · ${x.id.slice(0, 8)}` });
       const open = async (id: string): Promise<CommandResult> => {
         await app.switchSession(id);
         return { reload: true, output: `Resumed ${app.title ? `"${app.title}"` : id.slice(0, 8)} (${app.agent.messages.length} messages).` };
       };
       if (arg) {
         const hit = list.find((x) => x.id.startsWith(arg));
-        return hit ? open(hit.id) : { output: `No session ${arg}. Run /resume to pick one.` };
+        if (hit) return open(hit.id);
+        const byTitle = list.filter((x) => x.title.toLowerCase().includes(arg.toLowerCase()));
+        if (byTitle.length === 1) return open(byTitle[0]!.id);
+        if (byTitle.length > 1) {
+          return { choose: { title: `Resume a session matching "${arg}"`, options: byTitle.map(pick), select: (i) => open(byTitle[i]!.id) } };
+        }
+        return { output: `No session matching "${arg}" — Run /resume to pick one.` };
       }
       if (!list.length) return { output: 'No other sessions in this directory.' };
       return {
-        choose: {
-          title: 'Resume a session',
-          options: list.map((x) => ({ label: oneLine(x.title, 60), hint: `${ago(x.updatedAt)} · ${x.messages} msgs${x.model ? ` · ${x.model}` : ''} · ${x.id.slice(0, 8)}` })),
-          select: (i) => open(list[i]!.id),
-        },
+        choose: { title: 'Resume a session', options: list.map(pick), select: (i) => open(list[i]!.id) },
       };
     },
     async suggest(app) {

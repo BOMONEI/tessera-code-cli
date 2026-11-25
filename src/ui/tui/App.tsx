@@ -1372,7 +1372,7 @@ export function TuiApp({
                 mask={maskSecretInput}
                 maxLines={inputMaxLines}
                 onCopy={(text) => void copyToClipboard(text).then((via) => (via ? showFlash('✓ clipboard copied!') : showFlash('✗ clipboard unavailable', false)))}
-                placeholder={busy ? (turnRef.current ? 'Type to steer the agent (delivered after the current step)' : '') : 'Ask anything · @ files · ! shell · / commands · \\⏎ newline'}
+                placeholder={busy ? (turnRef.current ? 'Type to steer the agent (delivered after the current step)' : '') : 'What should we work on? (/help for commands)'}
               />
             </>
           )}

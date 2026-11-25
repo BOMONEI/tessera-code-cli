@@ -71,6 +71,9 @@ export async function attachMentionedFiles(
   const { explicit, implicit } = parseMentions(prompt);
   const blocks: string[] = [];
   const notes: string[] = [];
+  // On Windows the cwd may be an 8.3 short path (RUNNER~1) while realpath returns the long one: relative() between
+  // the two would look like an escape, so everything would be refused as outside the project.
+  const cwdReal = await realpath(ctx.cwd).catch(() => ctx.cwd);
 
   const attach = async (candidate: string, isExplicit: boolean): Promise<void> => {
     const abs = resolvePath(ctx, candidate);
@@ -82,7 +85,9 @@ export async function attachMentionedFiles(
       return;
     }
     const rel = displayPath(ctx, abs);
-    if (isSensitivePath(ctx.cwd, abs) || isSensitivePath(ctx.cwd, target)) {
+    // abs is derived from ctx.cwd; target comes from realpath, so it is compared against the realpath of the cwd
+    // (on Windows the two spellings differ: RUNNER~1 vs the long user name).
+    if (isSensitivePath(ctx.cwd, abs) || isSensitivePath(cwdReal, target)) {
       if (isExplicit) notes.push(`@${candidate}: outside the project or protected; not attached`);
       return;
     }

@@ -113,7 +113,9 @@ export function imagesFromPaths(text: string): Array<ImageInput & { name: string
   const tokens = trimmed.match(/'[^']+'|"[^"]+"|(?:\\.|[^\s\\])+/g) ?? [];
   const out: Array<ImageInput & { name: string }> = [];
   for (const token of tokens) {
-    let path = token.replace(/^(['"])(.*)\1$/, '$2').replace(/\\(.)/g, '$1');
+    // Terminals escape spaces when dragging ("path\ with\ spaces"); unescape those without eating the backslashes
+    // of a Windows path (C:\Users\...).
+    let path = token.replace(/^(['"])(.*)\1$/, '$2').replace(/\\ /g, ' ');
     if (path.startsWith('file://')) path = decodeURIComponent(path.slice('file://'.length));
     if (path.startsWith('~/') || path.startsWith('~\\')) path = join(homedir(), path.slice(2));
     if (!isAbsolute(path) || !MEDIA_TYPES[extname(path).toLowerCase()] || !existsSync(path)) return undefined;

@@ -74,7 +74,15 @@ export interface UpdateIo {
   fetch?: typeof fetch;
   /** Runs the release's installer; resolves with its exit code. */
   runInstaller?: (script: string, version: string) => Promise<number>;
+  /** Windows only: installs the SHA-verified release tarball through npm. */
+  runTarballInstall?: (tarball: string, version: string) => Promise<number>;
   sourceCheckout?: boolean;
+}
+
+/** Windows: `npm install -g <tgz>` through cmd, its output going straight to the terminal. */
+async function installTarball(tarball: string, _version: string): Promise<number> {
+  const r = spawnSync(process.env.COMSPEC ?? 'cmd.exe', ['/d', '/s', '/c', `npm install -g "${tarball}"`], { stdio: 'inherit' });
+  return r.status ?? 1;
 }
 
 /** Runs install.sh with bash, pinned to `version`, its output going straight to the terminal. */
@@ -129,8 +137,8 @@ export async function runUpdate(current: string, opts: { check?: boolean }, io: 
     const tarball = join(dir, tgzName);
     await writeFile(tarball, tgz);
     try {
-      const r = spawnSync(process.env.COMSPEC ?? 'cmd.exe', ['/d', '/s', '/c', `npm install -g "${tarball}"`], { stdio: 'inherit' });
-      if (r.status !== 0) return r.status ?? 1;
+      const code = await (io.runTarballInstall ?? installTarball)(tarball, latest);
+      if (code !== 0) return code;
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

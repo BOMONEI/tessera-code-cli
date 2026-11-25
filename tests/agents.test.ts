@@ -7,6 +7,8 @@ import type { ModelInfo } from '../src/providers/catalog.js';
 // Every request answers after 100 ms with a report naming its prompt; `active`/`peak` count concurrent requests.
 let active = 0;
 let peak = 0;
+// When > 0, the next stream call(s) die mid-stream with a transport-looking error (network-drop retry tests).
+let dropsLeft = 0;
 const usage = { inputTokens: { total: 100, noCache: 100, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 10, text: 10, reasoning: 0 } };
 vi.mock('../src/providers/index.js', async (orig) => ({
   ...(await orig<typeof import('../src/providers/index.js')>()),
@@ -24,6 +26,16 @@ vi.mock('../src/providers/index.js', async (orig) => ({
         peak = Math.max(peak, active);
         await new Promise((r) => setTimeout(r, 100));
         active--;
+        if (dropsLeft > 0) {
+          dropsLeft--;
+          const parts: LanguageModelV4StreamPart[] = [
+            { type: 'stream-start', warnings: [] },
+            { type: 'text-start', id: 't' },
+            { type: 'text-delta', id: 't', delta: 'partial' },
+            { type: 'error', error: new Error('fetch failed') },
+          ];
+          return { stream: new ReadableStream({ start: (c) => (parts.forEach((p) => c.enqueue(p)), c.close()) }) };
+        }
         const asked = JSON.stringify(prompt.at(-1)?.content);
         const parts: LanguageModelV4StreamPart[] = [
           { type: 'stream-start', warnings: [] },
@@ -180,6 +192,29 @@ describe('system prompt', () => {
     }) as unknown as { task: { description: string } };
     expect(t.task.description).toContain('You are the orchestrator');
     expect(t.task.description).not.toContain('Do small tasks yourself');
+  });
+});
+
+describe('stream retry', () => {
+  it('restarts the attempt once when the stream dies mid-turn, and finishes normally', async () => {
+    dropsLeft = 1;
+    const { Agent } = await import('../src/agent/agent.js');
+    const a = new Agent({ model, apiKey: 'k', sessionId: 's', system: 'sys', tools: {}, maxSteps: 5, thinking: false, contextLimit: 300_000 });
+    const events: Array<{ type: string; text?: string }> = [];
+    for await (const ev of a.run('look at alpha')) events.push(ev as { type: string });
+    const infos = events.filter((e) => e.type === 'info').map((e) => e.text);
+    expect(infos).toEqual(['stream dropped — retrying once (network)']); // exactly one retry notice
+    expect(events.filter((e) => e.type === 'turn-finish')).toHaveLength(1); // one turn, finished normally
+    expect(events.at(-1)?.type).toBe('turn-finish');
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+    expect(JSON.stringify(a.messages.at(-1))).toContain('REPORT'); // the retry's answer is in the history
+
+    // A second drop in the same turn reports the failure instead of retrying again.
+    dropsLeft = 2;
+    const b = new Agent({ model, apiKey: 'k', sessionId: 's', system: 'sys', tools: {}, maxSteps: 5, thinking: false, contextLimit: 300_000 });
+    const bEvents: Array<{ type: string }> = [];
+    for await (const ev of b.run('look at alpha')) bEvents.push(ev as { type: string });
+    expect(bEvents.some((e) => e.type === 'error')).toBe(true);
   });
 });
 

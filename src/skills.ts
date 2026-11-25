@@ -120,7 +120,7 @@ async function skillFiles(dir: string): Promise<string[]> {
       const p = join(d, e.name);
       if (e.isDirectory()) {
         if (depth < 3) await walk(p, depth + 1);
-      } else if (relative(dir, p) !== 'SKILL.md') out.push(relative(dir, p));
+      } else if (relative(dir, p) !== 'SKILL.md') out.push(relative(dir, p).replace(/\\/g, '/')); // forward slashes read the same everywhere
     }
   };
   await walk(dir, 0);
@@ -132,7 +132,10 @@ export async function skillPrompt(skill: Skill, args?: string): Promise<string> 
   const { body } = parseSkillFile(await readFile(skill.file, 'utf8'));
   const files = await skillFiles(skill.dir);
   const isLarge = (await stat(skill.file)).size > 200_000;
-  const head = [`# Skill: ${skill.name}`, `Skill folder: ${skill.dir} (paths in these instructions are relative to it).`];
+  const head = [
+    `# Skill: ${skill.name}`,
+    `Skill folder: ${skill.dir} (paths in these instructions are relative to it).`,
+  ];
   if (files.length) head.push(`Files: ${files.join(', ')}${files.length >= MAX_LISTED_FILES ? ', …' : ''}`);
   const parts = [head.join('\n'), isLarge ? `${body.slice(0, 200_000)}\n\n[SKILL.md truncated; read ${skill.file} for the rest]` : body];
   if (args?.trim()) parts.push(`## Arguments\n${args.trim()}`);

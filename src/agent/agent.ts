@@ -224,6 +224,13 @@ export function errorMessage(e: unknown): string {
   return err?.message ?? String(e);
 }
 
+/** Transport-level failure (network drop, socket, timeout) rather than an HTTP response with a body. */
+function isTransportError(e: unknown): boolean {
+  const err = e as { statusCode?: number; responseBody?: string; message?: string };
+  if (err?.statusCode || err?.responseBody) return false; // a real HTTP answer: report it, do not retry
+  return !err?.message || /network|socket|ECONN|timeout|terminated|fetch failed/i.test(err.message);
+}
+
 export class Agent {
   messages: ModelMessage[];
   model: ModelInfo;
@@ -517,8 +524,10 @@ export class Agent {
     let stepsSoFar = 0;
     let afterInterrupt = false;
     let stepLimitContinues = 0;
+    let streamRetries = 0; // one mid-stream network retry per turn, not per step
     for (;;) {
       let cutIn = false;
+      let retryPending = false; // the attempt died on a network error and a retry cut-in is queued
       const attempt = new AbortController();
       this.stepAbort = attempt;
       const attempted = (stepsSoFar || afterInterrupt) && completed.length ? [...history, ...completed] : history;
@@ -537,7 +546,7 @@ export class Agent {
         // Mapped to reasoning_effort / thinking budgets per provider; non-reasoning models get no parameter. The level is
         // always explicit: leaving it to the provider default answered noticeably later on OpenCode Go.
         reasoning: this.model.reasoning ? this.turnLevel : undefined,
-        maxRetries: (this.opts.fallback?.models.length ?? 0) > 0 ? 0 : 2, // the fallback chain is the retry policy
+        maxRetries: 0, // the fallback chain and the turn-level stream retry (below) are the retry policy
         abortSignal: signal ? AbortSignal.any([signal, attempt.signal]) : attempt.signal,
         onError: () => {}, // surfaced through the 'error' stream part instead
         onStepEnd: (step) => {
@@ -679,6 +688,7 @@ export class Agent {
               yield { type: 'tool-result', id: part.toolCallId, name: part.toolName, output: errorMessage(part.error), isError: true };
               break;
             case 'finish-step': {
+              if (retryPending) break; // bookkeeping for the dead attempt: its partial step is dropped
               stepsSoFar++;
               if (stepOutputAt !== undefined) outputMs += performance.now() - stepOutputAt;
               stepOutputAt = undefined;
@@ -691,6 +701,9 @@ export class Agent {
               break;
             }
             case 'finish': {
+              // The SDK still sends a trailing finish after a mid-stream error; it belongs to the dead attempt,
+              // the retry restarts the turn, so do not end the turn with it.
+              if (retryPending) break;
               // The loop stopped at the step budget mid-task (the model's last step wanted tools): auto-continue
               // with a fresh budget and a note, instead of ending the turn as if the model had answered.
               const stepLimit = stepsSoFar >= this.opts.maxSteps && part.finishReason === 'tool-calls';
@@ -723,7 +736,13 @@ export class Agent {
             case 'error':
               // A soft interrupt can surface as an error part; it ends the attempt, not the turn.
               if (attempt.signal.aborted && !signal?.aborted) cutIn = true;
-              else {
+              else if (streamRetries < 1 && !signal?.aborted && isTransportError(part.error)) {
+                // The stream died mid-turn (network): restart the attempt once instead of failing the turn.
+                streamRetries++;
+                retryPending = true;
+                yield { type: 'info', text: 'stream dropped — retrying once (network)' };
+                cutIn = true;
+              } else {
                 failed = true;
                 if (!signal?.aborted) yield { type: 'error', message: errorMessage(part.error) };
               }
@@ -737,7 +756,12 @@ export class Agent {
         }
       } catch (e) {
         if (attempt.signal.aborted && !signal?.aborted) cutIn = true;
-        else {
+        else if (streamRetries < 1 && !signal?.aborted && isTransportError(e)) {
+          streamRetries++;
+          retryPending = true;
+          yield { type: 'info', text: 'stream dropped — retrying once (network)' };
+          cutIn = true;
+        } else {
           failed = true;
           if (!signal?.aborted) yield { type: 'error', message: errorMessage(e) };
         }

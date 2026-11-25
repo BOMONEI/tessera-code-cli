@@ -352,6 +352,13 @@ export function WelcomeCard({ info }: { info: WelcomeInfo }) {
           {n}
         </Text>
       ))}
+      {/* Brand-new session (no messages, hence no 'session:' note): one static hint line, examples slightly brighter. */}
+      {!info.notes.some((n) => n.startsWith('session:')) ? (
+        <Text dimColor wrap="truncate">
+          {'  '}Try: <Text color="#94a3b8">fix the failing test</Text> · <Text color="#94a3b8">explain this codebase</Text> ·{' '}
+          <Text color="#94a3b8">/help for commands</Text>
+        </Text>
+      ) : null}
     </Box>
   );
 }

