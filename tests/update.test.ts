@@ -106,7 +106,13 @@ describe('tessera-code update', () => {
 
   it('passes the installer\'s failure on', async () => {
     let out = '';
-    const code = await runUpdate('0.3.0', {}, { write: (t) => (out += t), fetch: release('0.3.1').fetchFn, sourceCheckout: false, runInstaller: async () => 3 });
+    const code = await runUpdate('0.3.0', {}, {
+      write: (t) => (out += t),
+      fetch: release('0.3.1').fetchFn,
+      sourceCheckout: false,
+      runInstaller: async () => 3,
+      runTarballInstall: async () => 3, // the Windows path: same propagation, no real npm call
+    });
     expect(code).toBe(3);
     expect(out).not.toMatch(/Updated/);
   });
