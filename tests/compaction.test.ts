@@ -416,3 +416,33 @@ describe('compaction split and prune', () => {
     expect(pruneToolResults([user('q'), toolMsg('1'), toolMsg('2')])).toBeUndefined(); // nothing to clear
   });
 });
+
+describe('step limit auto-continue', () => {
+  const small = () => new Agent({ model, apiKey: 'k', sessionId: 's', system: 'sys', tools: { big }, maxSteps: 2, thinking: false, contextLimit: 300_000 });
+
+  it('auto-continues with a note when the step budget runs out mid-task', async () => {
+    prompts.length = 0;
+    script.push('tool', 'tool', 'tool', 'tool', 'tool', 'text');
+    const a = small();
+    const events: AgentEvent[] = [];
+    for await (const ev of a.run('do the task')) events.push(ev);
+    const infos = events.filter((e) => e.type === 'info').map((e) => (e as { text: string }).text);
+    expect(infos.filter((t) => t.includes('continuing automatically'))).toHaveLength(2);
+    const last = events.at(-1) as AgentEventOf<'turn-finish'>;
+    expect(last.type).toBe('turn-finish');
+    expect(last.stopNote).toBeUndefined(); // the model finished normally in the end
+    expect(JSON.stringify(a.messages)).toContain('step limit'); // both continue notes are in the history
+    expect(script).toHaveLength(0); // no step was skipped
+  });
+
+  it('reports the step limit when the auto-continues run out', async () => {
+    prompts.length = 0;
+    script.push('tool', 'tool', 'tool', 'tool', 'tool', 'tool', 'text');
+    const a = small();
+    const events: AgentEvent[] = [];
+    for await (const ev of a.run('do the task')) events.push(ev);
+    const last = events.at(-1) as AgentEventOf<'turn-finish'>;
+    expect(last.stopNote).toContain('step limit');
+    expect(last.finishReason).toBe('tool-calls');
+  });
+});

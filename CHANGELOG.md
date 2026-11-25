@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.21 — 2026-11-20
+
+### Fixed
+- A turn that hit the step limit mid-task no longer ends silently (it read like the agent just stopping): it
+  auto-continues up to twice with a fresh 50-step budget and a "continue where it left off" note, announcing each
+  continuation in the conversation. When the cap is spent, the summary line says why the turn stopped
+  ("step limit (50) reached after 3 × 50 steps — send any prompt to continue"), as does an answer cut at the
+  32k output cap ("output limit reached").
+
 ## 0.7.20 — 2026-11-20
 
 ### Added

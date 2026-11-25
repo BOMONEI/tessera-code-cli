@@ -23,7 +23,7 @@ export type AgentEvent =
    * `outputMs`: time the model spent writing, summed over the steps (output tokens / outputMs = generation speed).
    * `discarded`: interrupted before the model answered anything; the prompt was left out of the history.
    */
-  | { type: 'turn-finish'; usage: Usage; finishReason: string; elapsedMs: number; firstOutputMs?: number; outputMs?: number; discarded?: boolean; readsAfterCompaction?: number }
+  | { type: 'turn-finish'; usage: Usage; finishReason: string; elapsedMs: number; firstOutputMs?: number; outputMs?: number; discarded?: boolean; readsAfterCompaction?: number; stopNote?: string }
   | { type: 'compacted'; before: number; summary: string }
   | { type: 'fallback'; from: string; to: string; reason: string }
   | { type: 'info'; text: string }
@@ -191,6 +191,11 @@ export const INTERJECTION_PREFIX = '[Sent by the user while you were working —
 
 const CONTINUE_AFTER_COMPACTION =
   'The context was compacted mid-task to stay under the context limit. Continue the current task from where it left off; re-read files before editing them.';
+
+/** Appended to the history when the step budget ran out mid-task: the turn continues from there, not over. */
+const STEP_LIMIT_NOTE =
+  '[The turn stopped at the step limit mid-task. Continue the task exactly where it left off — do not redo completed steps.]';
+const MAX_STEP_LIMIT_CONTINUES = 2;
 
 // Output cap per step; also sidesteps the Anthropic SDK's 4096 default for models it does not recognize.
 const MAX_OUTPUT_TOKENS = 32_000;
@@ -511,6 +516,7 @@ export class Agent {
     // injected at once. Steps finished so far count against maxSteps across restarts.
     let stepsSoFar = 0;
     let afterInterrupt = false;
+    let stepLimitContinues = 0;
     for (;;) {
       let cutIn = false;
       const attempt = new AbortController();
@@ -684,7 +690,19 @@ export class Agent {
               yield { type: 'step-finish', usage: u };
               break;
             }
-            case 'finish':
+            case 'finish': {
+              // The loop stopped at the step budget mid-task (the model's last step wanted tools): auto-continue
+              // with a fresh budget and a note, instead of ending the turn as if the model had answered.
+              const stepLimit = stepsSoFar >= this.opts.maxSteps && part.finishReason === 'tool-calls';
+              if (stepLimit && stepLimitContinues < MAX_STEP_LIMIT_CONTINUES && !signal?.aborted) {
+                stepLimitContinues++;
+                stepsSoFar = 0; // the continuation gets its own budget; the cap bounds the total
+                completed.push({ role: 'user', content: STEP_LIMIT_NOTE });
+                afterInterrupt = true; // the note rides the restart: attempted = [...history, ...completed]
+                yield { type: 'info', text: `step limit (${this.opts.maxSteps}) reached — continuing automatically (${stepLimitContinues}/${MAX_STEP_LIMIT_CONTINUES})` };
+                cutIn = true;
+                break;
+              }
               finished = true;
               yield {
                 type: 'turn-finish',
@@ -693,9 +711,15 @@ export class Agent {
                 elapsedMs: performance.now() - startedAt,
                 firstOutputMs: firstOutputAt === undefined ? undefined : firstOutputAt - startedAt,
                 outputMs,
+                ...(part.finishReason === 'length'
+                  ? { stopNote: 'output limit reached — the answer was cut; send any prompt to continue' }
+                  : stepLimit
+                    ? { stopNote: `step limit (${this.opts.maxSteps}) reached after ${MAX_STEP_LIMIT_CONTINUES + 1} × ${this.opts.maxSteps} steps — send any prompt to continue` }
+                    : {}),
                 ...(this.compactionSample.compactions ? { readsAfterCompaction: this.compactionSample.reads } : {}),
               };
               break;
+            }
             case 'error':
               // A soft interrupt can surface as an error part; it ends the attempt, not the turn.
               if (attempt.signal.aborted && !signal?.aborted) cutIn = true;

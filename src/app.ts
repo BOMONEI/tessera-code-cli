@@ -514,7 +514,7 @@ export async function createApp(opts: AppOptions): Promise<App> {
         try {
           await checkpoints.end();
           await store.sync(agent);
-          if (summary) await store.addSummary(agent.messages.length, `${formatTiming(summary)} · ${formatUsage(summary.usage)} · ${formatClock()}`);
+          if (summary) await store.addSummary(agent.messages.length, `${formatTiming(summary)}${summary.stopNote ? ` · ${summary.stopNote}` : ''} · ${formatUsage(summary.usage)} · ${formatClock()}`);
           await saveState();
         } finally {
           running = false;
