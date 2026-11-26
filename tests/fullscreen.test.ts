@@ -56,6 +56,15 @@ describe('mouse input', () => {
 });
 
 describe('transcript viewport', () => {
+  it("shows a tool's output even when its running state was drawn first (cache key collision)", () => {
+    const running = { id: 901, kind: 'tool', label: 'bash(echo hi)', fullLabel: 'bash(echo hi)', running: true, rev: 0 } as HistoryItem;
+    const before = buildTranscript([running], { width: 60, showThinking: true, isExpanded: () => false });
+    expect(stripAnsi(before.lines.join('\n'))).not.toContain('line-one'); // no result yet
+    const done = { ...running, running: false, output: 'line-one\nline-two', rev: 1 } as HistoryItem;
+    const after = buildTranscript([done], { width: 60, showThinking: true, isExpanded: () => false });
+    expect(stripAnsi(after.lines.join('\n'))).toContain('line-one'); // not the cached pre-result drawing
+  });
+
   const tool: HistoryItem = { id: 1, kind: 'tool', label: '$ seq 1 40', output: Array.from({ length: 40 }, (_, i) => String(i + 1)).join('\n'), lines: 12 };
   const items: HistoryItem[] = [{ id: 0, kind: 'info', text: 'hello' }, tool, { id: 2, kind: 'reasoning', text: 'step one\nstep two', ms: 2000 }];
 

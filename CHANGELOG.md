@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.25 — 2026-11-20
+
+### Fixed
+- In the full-screen view a completed tool line could stay a bare `● bash(...) (click to expand)`: the transcript
+  cache keyed a tool by id+rev, and both its first painting (running, rev 0) and its completed state resolved to
+  rev 0, so the finished output hit the pre-result cache and never appeared. The key now marks whether an output
+  exists, so the result always fills the line (older lines that a click or a renderer flip had already repainted
+  looked fine — only recent ones were affected).
+
 ## 0.7.24 — 2026-11-20
 
 ### Added
