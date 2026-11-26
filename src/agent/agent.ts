@@ -1,6 +1,6 @@
 import { streamText, isStepCount, type ModelMessage, type ToolSet, type LanguageModelUsage } from 'ai';
 import { createModel, costOf } from '../providers/index.js';
-import { isZdr, type ModelInfo } from '../providers/catalog.js';
+import type { ModelInfo } from '../providers/catalog.js';
 import { withFallback, type FallbackState } from '../providers/fallback.js';
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import { recordSpend } from '../cost/ledger.js';
@@ -224,6 +224,14 @@ export function errorMessage(e: unknown): string {
   return err?.message ?? String(e);
 }
 
+/** The provider rejected the request because the context no longer fits: the turn must compact and go on. */
+function isContextOverflow(e: unknown): boolean {
+  const err = e as { statusCode?: number; message?: string; responseBody?: string };
+  const text = `${err?.message ?? ''} ${err?.responseBody ?? ''}`.toLowerCase();
+  if (err?.statusCode !== 400 && err?.statusCode !== 413) return false;
+  return /context|too many (tokens|messages)|prompt is too long|input length|maximum .{0,30}tokens|reduce the length|exceeds/.test(text);
+}
+
 /** Transport-level failure (network drop, socket, timeout) rather than an HTTP response with a body. */
 function isTransportError(e: unknown): boolean {
   const err = e as { statusCode?: number; responseBody?: string; message?: string };
@@ -284,6 +292,11 @@ export class Agent {
     this.contextTokens = estimateTokens(messages);
   }
 
+  /** Drops the cached provider clients (a refreshed token or a removed key must take effect at once). */
+  invalidateModels(): void {
+    this.models.clear();
+  }
+
   /** Forget a sticky fallback, e.g. after the user picks a model explicitly. */
   resetFallback(): void {
     this.fallbackState = { start: 0, until: 0 };
@@ -293,7 +306,7 @@ export class Agent {
   private fallbackChain(): ModelInfo[] {
     // The fallback chain is OpenCode Go's: a model the user picked from another provider is not swapped silently.
     if (this.model.provider) return [];
-    return (this.opts.fallback?.models ?? []).filter((m) => m.id !== this.model.id && isZdr(m.id));
+    return (this.opts.fallback?.models ?? []).filter((m) => m.id !== this.model.id);
   }
 
   /** Main model wrapped with the ZDR fallback chain; reports which model served and any switch. */
@@ -525,6 +538,34 @@ export class Agent {
     let afterInterrupt = false;
     let stepLimitContinues = 0;
     let streamRetries = 0; // one mid-stream network retry per turn, not per step
+    let contextRetried = false; // one compact-and-continue when the provider rejects the context
+    // On a context overflow the history (plus this turn's steps) is summarized and the attempt restarts — the
+    // provider, not our estimate, is the authority on when the window is full.
+    const compactAfterOverflow = async (): Promise<boolean> => {
+      try {
+        const attempted = completed.length ? [...history, ...completed] : history;
+        const [toCompress, tail] = splitForCompaction(attempted);
+        const r = await summarize({
+          model: this.model,
+          apiKey: this.opts.apiKey,
+          sessionId: this.opts.sessionId,
+          messages: toCompress.length ? toCompress : attempted,
+          abortSignal: signal,
+          onProgress: this.onCompactProgress,
+        });
+        const u = toUsage(this.model, { inputTokens: r.inputTokens, outputTokens: r.outputTokens } as LanguageModelUsage);
+        this.addUsage(turn, u);
+        this.addUsage(this.total, u);
+        this.spend(u.cost);
+        history = [...compactedHistory(r.summary), ...(toCompress.length ? tail : [])];
+        completed = [];
+        this.replaceHistory(history);
+        notices.push({ type: 'compacted', before: estimateMessagesTokens(attempted), summary: r.summary });
+        return true;
+      } catch {
+        return false;
+      }
+    };
     for (;;) {
       let cutIn = false;
       let retryPending = false; // the attempt died on a network error and a retry cut-in is queued
@@ -756,7 +797,17 @@ export class Agent {
             case 'error':
               // A soft interrupt can surface as an error part; it ends the attempt, not the turn.
               if (attempt.signal.aborted && !signal?.aborted) cutIn = true;
-              else if (streamRetries < 1 && !signal?.aborted && isTransportError(part.error)) {
+              else if (!signal?.aborted && !contextRetried && isContextOverflow(part.error)) {
+                // The context outgrew the window: summarize and continue instead of dying at 100%.
+                contextRetried = true;
+                retryPending = true; // the trailing finish of the dead attempt must not end the turn
+                notices.push({ type: 'info', text: 'context limit reached — compacting and continuing' });
+                if (await compactAfterOverflow()) cutIn = true;
+                else {
+                  failed = true;
+                  yield { type: 'error', message: errorMessage(part.error) };
+                }
+              } else if (streamRetries < 1 && !signal?.aborted && isTransportError(part.error)) {
                 // The stream died mid-turn (network): restart the attempt once instead of failing the turn.
                 streamRetries++;
                 retryPending = true;
@@ -770,13 +821,26 @@ export class Agent {
             case 'abort':
               // A soft interrupt ends the attempt, not the turn; the user's own interrupt still ends it.
               if (attempt.signal.aborted && !signal?.aborted) cutIn = true;
-              else failed = true;
+              else {
+                failed = true;
+                // Never die silently: the user sees why the turn stopped (network deaths arrive as 'error' parts).
+                if (!signal?.aborted) yield { type: 'error', message: 'The connection dropped mid-answer.' };
+              }
               break;
           }
         }
       } catch (e) {
         if (attempt.signal.aborted && !signal?.aborted) cutIn = true;
-        else if (streamRetries < 1 && !signal?.aborted && isTransportError(e)) {
+        else if (!signal?.aborted && !contextRetried && isContextOverflow(e)) {
+          contextRetried = true;
+          retryPending = true;
+          notices.push({ type: 'info', text: 'context limit reached — compacting and continuing' });
+          if (await compactAfterOverflow()) cutIn = true;
+          else {
+            failed = true;
+            yield { type: 'error', message: errorMessage(e) };
+          }
+        } else if (streamRetries < 1 && !signal?.aborted && isTransportError(e)) {
           streamRetries++;
           retryPending = true;
           yield { type: 'info', text: 'stream dropped — retrying once (network)' };

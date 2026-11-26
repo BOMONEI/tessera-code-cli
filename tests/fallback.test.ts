@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { LanguageModelV4, LanguageModelV4StreamPart } from '@ai-sdk/provider';
 import { shouldFallBack, withFallback, type FallbackEvent } from '../src/providers/fallback.js';
-import { createModel, NonZdrModelError } from '../src/providers/index.js';
+import { createModel } from '../src/providers/index.js';
 import type { ModelInfo } from '../src/providers/catalog.js';
 
 const info = (id: string): ModelInfo => ({ id, name: id, format: 'chat', context: 1000, output: 100, reasoning: false, cost: { input: 0, output: 0, cacheRead: 0 } });
@@ -153,10 +153,10 @@ describe('shouldFallBack', () => {
   ])('%j -> %s', (e, expected) => expect(shouldFallBack(e)).toBe(expected));
 });
 
-describe('ZDR enforcement', () => {
-  it('refuses to build a model that is not zero-data-retention', () => {
-    expect(() => createModel(info('gpt-6-luna'), { apiKey: 'k', sessionId: 's' })).toThrow(NonZdrModelError);
-    expect(() => createModel(info('deepseek-v4-flash'), { apiKey: 'k', sessionId: 's' })).toThrow(NonZdrModelError);
+describe('model building', () => {
+  it('builds non-ZDR models too (the warning stays in the UI)', () => {
+    expect(() => createModel(info('gpt-6-luna'), { apiKey: 'k', sessionId: 's' })).not.toThrow();
+    expect(() => createModel(info('deepseek-v4-flash'), { apiKey: 'k', sessionId: 's' })).not.toThrow();
     expect(() => createModel(info('mimo-v2.6-flash'), { apiKey: 'k', sessionId: 's' })).not.toThrow();
   });
 });

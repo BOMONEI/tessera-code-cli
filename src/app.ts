@@ -21,6 +21,7 @@ import { fetchGoUsage, type GoUsage } from './cost/go.js';
 import { skillTools } from './tools/skill.js';
 import { SUBAGENT_ROLES, taskTool, type SubagentBlock, type SubagentProgress } from './tools/task.js';
 import { discoverSkills, type Skill } from './skills.js';
+import { refreshDueProviders } from './oauth.js';
 import { attachMentionedFiles } from './agent/attachments.js';
 import { HookRunner } from './hooks.js';
 import { connectMcp, type McpConnection, type McpServerStatus } from './mcp.js';
@@ -69,6 +70,10 @@ export interface App {
   setAgentsMode(mode: AgentsMode): Promise<void>;
   /** Set by the UI: what a running subagent is doing. */
   onTaskProgress?: (p: SubagentProgress) => void;
+  /** Set by the UI: an uncollected subagent report finished while idle — the agent continues on its own. */
+  onAutoTurn?: (prompt: string) => void;
+  /** Drops the cached provider clients (after /login, /logout or a token refresh). */
+  invalidateModels(): void;
   /** Switches the permission mode and makes it the default everywhere ("permissionMode" in config.json). */
   setPermissionMode(mode: PermissionMode): Promise<void>;
   mcpStatus: McpServerStatus[];
@@ -114,6 +119,10 @@ export interface App {
 
 /** How long a turn waits for MCP servers that are still connecting (exa usually connects in ~0.6 s). */
 const MCP_TURN_WAIT_MS = 1500;
+
+/** The prompt an auto-turn runs with when a background subagent's report arrives (its text comes as context). */
+const AUTO_TURN_PROMPT =
+  'A background subagent finished. Its report was folded into this message — review it and continue the task you were doing.';
 
 /** Appends the compaction-quality sample (reads in the turn right after a compaction) to
  *  ~/.tessera-code/compaction-log.jsonl, so the tail budget can be tuned from real sessions. Best effort. */
@@ -235,6 +244,11 @@ export async function createApp(opts: AppOptions): Promise<App> {
   const pendingShell: string[] = [];
   /** Reports of background subagents that finished uncollected: they go out with the next prompt. */
   const pendingReports: string[] = [];
+  /** A background subagent's report wakes the agent when no turn is running (claude-code style). The report
+   *  itself rides the turn as beforeTurn context; this only starts the turn. */
+  const maybeAutoTurn = () => {
+    if (!running && pendingReports.length && app.onAutoTurn) app.onAutoTurn(AUTO_TURN_PROMPT);
+  };
   // One turn at a time; session switches and rewinds must not interleave with a running turn (its end would
   // overwrite the history they install).
   let running = false;
@@ -324,10 +338,12 @@ export async function createApp(opts: AppOptions): Promise<App> {
     onProgress: (p) => app.onTaskProgress?.(p),
     onUsage: (u) => agent.absorbUsage(u),
     // An uncollected report goes out with the next prompt (like a completion notification).
-    onFinished: (t) =>
+    onFinished: (t) => {
       pendingReports.push(
         `Subagent report (${t.type}, ${t.description}):\n\n${t.report}${t.errors.length ? `\n\n[subagent errors: ${t.errors.join('; ')}]` : ''}`,
-      ),
+      );
+      maybeAutoTurn();
+    },
   });
   /** The agent's tools: built-ins, connected MCP servers, and the subagent tools when subagents are on. */
   const rebuildTools = () => {
@@ -498,6 +514,8 @@ export async function createApp(opts: AppOptions): Promise<App> {
       }
       idle();
       running = true;
+      // A subscription token close to expiry is renewed before the request goes out (best effort).
+      if (await refreshDueProviders(config)) agent.invalidateModels();
       const firstTurn = !agent.messages.length && !title;
       let started = false;
       let summary: Extract<AgentEvent, { type: 'turn-finish' }> | undefined;
@@ -540,6 +558,7 @@ export async function createApp(opts: AppOptions): Promise<App> {
           await saveState();
         } finally {
           running = false;
+          maybeAutoTurn(); // a report that arrived mid-turn wakes the agent now
         }
       }
       if (firstTurn && !signal?.aborted) {
@@ -570,6 +589,7 @@ export async function createApp(opts: AppOptions): Promise<App> {
     addMemo: (text) => store.addMemo(text),
     removeMemo: (index) => store.removeMemo(index),
     pruneSessions,
+    invalidateModels: () => agent.invalidateModels(),
     // Real usage only for Go models: the allowance is theirs to spend; other providers have no such endpoint.
     goUsage: () => (!agent.model.provider && agent.apiKey ? fetchGoUsage(agent.apiKey) : Promise.resolve(undefined)),
     subagentTail: (id) => subagentTailTool(id),

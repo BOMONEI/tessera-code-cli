@@ -789,6 +789,12 @@ export function TuiApp({
         }
         if (controller.signal.aborted) pendingOrder.current = pendingOrder.current.filter((p) => p.kind === 'queued');
         endBusy();
+        // A subagent report that arrived while this turn ran: wake the agent for it right away.
+        const auto = autoPendingRef.current;
+        if (auto) {
+          autoPendingRef.current = undefined;
+          autoRunRef.current(auto);
+        }
         const seconds = (Date.now() - started) / 1000;
         const after = core.config.notifyAfterSeconds;
         if (after > 0 && seconds >= after && !controller.signal.aborted) notify(`tessera-code: ${failed ? 'stopped with an error' : 'done'} (${Math.round(seconds)}s)`);
@@ -799,6 +805,31 @@ export function TuiApp({
     },
     [core, flushReasoning, flushStream, push, scheduleRender, setInput, showFlash],
   );
+
+  // A background subagent's report wakes the agent on its own (claude-code style): if a turn is running the
+  // request waits, and runTurn's cleanup above starts it the moment the turn ends.
+  const autoPendingRef = useRef<string | undefined>(undefined);
+  const autoRunRef = useRef<(prompt: string) => void>(() => {});
+  const startAutoTurn = useCallback(
+    async (prompt: string) => {
+      push({ kind: 'info', text: '⟳ subagent finished — the agent continues automatically' });
+      await runTurn(prompt);
+    },
+    [push, runTurn],
+  );
+  autoRunRef.current = startAutoTurn;
+  useEffect(() => {
+    core.onAutoTurn = (prompt) => {
+      if (busyRef.current || turnRef.current || choiceRef.current) {
+        autoPendingRef.current = prompt;
+        return;
+      }
+      void startAutoTurn(prompt);
+    };
+    return () => {
+      core.onAutoTurn = undefined;
+    };
+  }, [core, startAutoTurn]);
 
   /** "!cmd": runs in the shell directly (the user typed it, so no approval); the output goes to the next prompt. */
   const runShell = useCallback(

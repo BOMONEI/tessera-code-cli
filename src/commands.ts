@@ -14,6 +14,7 @@ import type { ModelMessage } from 'ai';
 import { checkApiKey, maskKey, removeProjectAllowRule, saveApiKey, saveGlobalSetting, userProjectAllow } from './config.js';
 import { apiFetch } from './providers/net.js';
 import { addPrompt, listPrompts, promptFile, removePrompt, type PromptScope } from './prompts.js';
+import { OAUTH_FLOWS, fetchCodexModels, forgetProvider, loginFlow, oauthFlow, oauthStatus } from './oauth.js';
 import { createSkill, installSkills, skillPrompt, skillTarget, type Skill } from './skills.js';
 import { projectTrust, trustProject } from './config.js';
 import { copyTargets, copyToClipboard } from './ui/clipboard.js';
@@ -161,43 +162,63 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
   },
   {
     name: 'auth',
-    description: 'register an API key: /auth <key> for OpenCode Go, /auth <provider> <key> for another provider',
+    description: 'register an API key: /auth picks the provider, then the key (masked); /auth <key> for OpenCode Go',
     argHint: '[provider] [key]',
     async run(app, arg) {
       const [first = '', second = ''] = arg.trim().split(/\s+/);
       const def = providerDef(first);
+      // Picked from the provider list: hand the line back for the key (it shows as dots while typing).
+      if (first === OPENCODE_GO && !second) {
+        return {
+          input: '/auth ',
+          output: app.agent.apiKey
+            ? `API key ${maskKey(app.agent.apiKey)} · from ${app.apiKeySource}. Paste a new key below to replace it.`
+            : 'No API key registered. Get one at https://opencode.ai (OpenCode Go), then paste the key below.',
+        };
+      }
       if (def) {
         if (!second) {
+          if (def.local) {
+            const choose = await providerModelChoose(app, def.id);
+            return choose ?? { output: `${def.name} runs locally, but no models answered — is the server running? Its models appear here once it is.` };
+          }
           const k = providerKey(def.id);
-          return { output: def.local ? `${def.name} runs locally; no key needed.` : k ? `${def.name}: key ${maskKey(k.key)} from ${k.source}.` : `${def.name}: no key. Run /auth ${def.id} <key> (or set ${def.env[0]}).` };
+          return {
+            input: `/auth ${def.id} `,
+            output: k
+              ? `${def.name}: key ${maskKey(k.key)} from ${k.source}. Paste a new key below to replace it.`
+              : `${def.name}: paste the API key below (it shows as dots), then Enter. It is saved to ~/.tessera-code/config.json.`,
+          };
         }
         const providers = { ...app.config.providers, [def.id]: { ...app.config.providers[def.id], apiKey: second } };
         await saveGlobalSetting('providers', providers);
         app.config.providers = providers;
         setProviderSettings(providers);
         const zdr = providerIsZdr(def.id) ? '' : ` ⚠ ${def.name} is not zero-data-retention unless your account has a ZDR agreement (then set "zdr": true for it).`;
-        return { output: `Saved the ${def.name} key ${maskKey(second)} to ~/.tessera-code/config.json. Pick a model: /model ${def.id}/…${zdr}` };
+        const pick = await providerModelChoose(app, def.id);
+        // The saved message stays visible above the model picker that opens for this provider.
+        return { output: `Saved the ${def.name} key ${maskKey(second)} to ~/.tessera-code/config.json.${zdr}`, ...(pick?.choose ? { choose: pick.choose } : {}) };
       }
       const key = arg.trim();
-      if (!key) {
-        return {
-          output: app.agent.apiKey
-            ? `API key ${maskKey(app.agent.apiKey)} · from ${app.apiKeySource}. Run /auth <key> to replace it.`
-            : 'No API key registered. Get one at https://opencode.ai (OpenCode Go), then run /auth <key>.',
-        };
-      }
       if (/\s/.test(key)) return { output: 'An API key has no spaces. Usage: /auth <key>' };
       const check = await checkApiKey(key, apiFetch);
       if (check === 'rejected') return { output: `✗ OpenCode Go rejected ${maskKey(key)}; nothing was saved. Check the key and try again.` };
       await saveApiKey(key);
       app.setApiKey(key, '~/.tessera-code/config.json');
       const env = process.env.OPENCODE_API_KEY ? ' (OPENCODE_API_KEY is set in the environment and will override it on the next start)' : '';
-      return {
-        output:
-          check === 'ok'
-            ? `✓ API key ${maskKey(key)} verified and saved to ~/.tessera-code/config.json${env}.`
-            : `API key ${maskKey(key)} saved to ~/.tessera-code/config.json, but it could not be verified now (network?)${env}.`,
-      };
+      const saved =
+        check === 'ok'
+          ? `✓ API key ${maskKey(key)} verified and saved to ~/.tessera-code/config.json${env}.`
+          : `API key ${maskKey(key)} saved to ~/.tessera-code/config.json, but it could not be verified now (network?)${env}.`;
+      const pick = await providerModelChoose(app, OPENCODE_GO);
+      return { output: saved, ...(pick?.choose ? { choose: pick.choose } : {}) };
+    },
+    async suggest(app) {
+      const go = app.agent.apiKey ? ' · key set' : ' · no key';
+      return [
+        { value: OPENCODE_GO, hint: `OpenCode Go (default)${go}` },
+        ...PROVIDERS.map((p) => ({ value: p.id, hint: `${p.name}${p.local ? ' (local)' : providerKey(p.id) ? ' · key set' : ' · no key yet'}` })),
+      ];
     },
   },
   {
@@ -553,6 +574,70 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
     },
   },
   {
+    name: 'login',
+    description: 'sign in with a subscription (OAuth): /login picks the provider, then the browser',
+    argHint: '[provider]',
+    async run(app, arg) {
+      const id = arg.trim();
+      const flow = oauthFlow(id);
+      if (!flow) return { output: `No subscription sign-in for ${id || '(nothing given)'}. Available: ${OAUTH_FLOWS.map((f) => f.id).join(', ')} — or /auth <provider> <key>.` };
+      let result: { key?: string; oauth?: import('./oauth.js').OAuthTokens };
+      try {
+        result = await loginFlow(flow);
+      } catch (e) {
+        return { output: `Sign-in failed: ${(e as Error).message}` };
+      }
+      const providers = { ...app.config.providers };
+      if (result.key) providers[id] = { ...providers[id], apiKey: result.key };
+      else if (result.oauth) providers[id] = { ...providers[id], oauth: result.oauth };
+      await saveGlobalSetting('providers', providers);
+      app.config.providers = providers;
+      setProviderSettings(providers);
+      app.invalidateModels();
+      // ChatGPT plans serve their own model slugs: ask the backend, register them here and in config so the
+      // picker (and later sessions) see what the plan actually allows.
+      if (id === 'openai' && result.oauth) {
+        const slugs = await fetchCodexModels(result.oauth);
+        if (slugs?.length) {
+          for (const slug of slugs) {
+            const mid = `openai/${slug}`;
+            if (!app.catalog.some((m) => m.id === mid)) {
+              app.catalog.push({ id: mid, name: slug, format: 'responses', context: 400_000, output: 128_000, reasoning: true, images: true, provider: 'openai', cost: { input: 0, output: 0, cacheRead: 0 } });
+            }
+          }
+          const withModels = { ...providers, openai: { ...providers.openai, models: Object.fromEntries(slugs.map((sl) => [sl, {}])) } };
+          await saveGlobalSetting('providers', withModels);
+          app.config.providers = withModels;
+          setProviderSettings(withModels);
+        }
+      }
+      const saved = result.key ? `Saved the ${flow.name} key to ~/.tessera-code/config.json.` : `Signed in with ${flow.name}. ${oauthStatus(id) ?? ''}`.trim();
+      const pick = await providerModelChoose(app, id);
+      return { output: saved, ...(pick?.choose ? { choose: pick.choose } : {}) };
+    },
+    async suggest() {
+      return OAUTH_FLOWS.map((f) => ({ value: f.id, hint: `${f.name}${providerKey(f.id) ? ' · connected' : ''}` }));
+    },
+  },
+  {
+    name: 'logout',
+    description: 'remove a saved key or subscription for a provider',
+    argHint: '[provider]',
+    async run(app, arg) {
+      const id = arg.trim();
+      if (!id) return { output: `Usage: /logout <provider> — e.g. /logout ${OAUTH_FLOWS[0]!.id}` };
+      const had = await forgetProvider(app.config, id);
+      if (!had) return { output: `Nothing saved for ${id}.` };
+      app.invalidateModels();
+      return { output: `Removed the saved credentials for ${id}. It is usable again once you /auth or /login it.` };
+    },
+    async suggest(app) {
+      return Object.entries(app.config.providers)
+        .filter(([, v]) => v.apiKey || v.oauth)
+        .map(([id]) => ({ value: id, hint: providerDef(id)?.name ?? id }));
+    },
+  },
+  {
     name: 'context',
     description: 'show context window usage',
     async run(app) {
@@ -838,6 +923,33 @@ function parseCommandFile(name: string, raw: string): SlashCommand {
       return { prompt: body.includes('$ARGUMENTS') ? body.replaceAll('$ARGUMENTS', arg) : arg ? `${body}\n\n${arg}` : body };
     },
   };
+}
+
+/** The models of one provider (or of OpenCode Go) as a picker — registration leads straight into picking.
+ *  Never throws: a catalogless stub or an odd app state must not break /auth or /login. */
+async function providerModelChoose(app: App, provider: string): Promise<CommandResult | undefined> {
+  try {
+    const models = (await pickableModels(app)).filter((m) => (m.provider ?? OPENCODE_GO) === provider);
+    if (!models.length || !app.agent.model) return undefined;
+    return {
+      choose: {
+        title: `Models for ${provider === OPENCODE_GO ? 'OpenCode Go' : providerDef(provider)?.name ?? provider}`,
+        options: models.map((m) => ({
+          label: m.id,
+          hint: `${m.id === app.agent.model.id ? 'current · ' : ''}${modelIsZdr(m) ? '' : 'non-ZDR · '}ctx ${formatTokens(m.context)} · ${m.cost.input === 0 ? 'subscription' : `$${m.cost.input}/$${m.cost.output} per 1M`}${m.reasoning ? ' · thinking' : ''}`,
+        })),
+        select: async (i, save) => {
+          const id = models[i]!.id;
+          await app.setModel(id);
+          if (save) await saveGlobalSetting('model', id);
+          return { output: `Model set to ${id}${save ? ' — saved as the default for new sessions.' : ''}` };
+        },
+        canSave: true,
+      },
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 /** Models that can be picked now: OpenCode Go's ZDR ones, connected providers' ones, and what local servers have. */

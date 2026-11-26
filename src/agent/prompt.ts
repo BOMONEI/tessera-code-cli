@@ -8,6 +8,7 @@ import { primeProjectFiles, projectFileList } from './attachments.js';
 
 import { skillsSection, type Skill } from '../skills.js';
 import { shellPrefix } from '../shellpath.js';
+import { providerDef, splitModelId } from '../providers/registry.js';
 
 const INSTRUCTION_FILES = ['TESSERA.md', 'AGENTS.md', 'CLAUDE.md'];
 
@@ -135,7 +136,10 @@ export async function buildSystemPrompt(cwd: string, modelId: string, skills: Sk
     `Platform: ${platform()} ${release()}`,
     `Shell: ${shell.label === 'cmd' ? 'cmd (Windows command line; no POSIX paths or bash syntax)' : 'bash'}`,
     `Date: ${new Date().toISOString().slice(0, 10)}`,
-    `Model: ${modelId} (via OpenCode Go)`,
+    `Model: ${modelId} (${(() => {
+      const { provider } = splitModelId(modelId);
+      return provider ? providerDef(provider)?.name ?? provider : 'OpenCode Go';
+    })()})`,
     gitBlock,
   ].join('\n');
   const files = projectFileList(cwd);

@@ -77,6 +77,8 @@ export interface ProviderSettings {
    * their limits, e.g. ["qwen3:32b"] or { "qwen3:32b": { "context": 32768 } }. A listed model's limits override the catalog's.
    */
   models?: string[] | Record<string, ConfiguredModel>;
+  /** A subscription sign-in (/login): the access token is used like a key and refreshed before it expires. */
+  oauth?: { accessToken: string; refreshToken?: string; expiresAt: number; scope?: string; accountId?: string };
 }
 
 export interface ConfiguredModel {
@@ -102,6 +104,8 @@ export function providerSettings(id: string): ProviderSettings {
 export function providerKey(id: string, env: NodeJS.ProcessEnv = process.env): { key: string; source: string } | undefined {
   const own = providerSettings(id).apiKey?.trim();
   if (own) return { key: own, source: 'config.json' };
+  const oauth = providerSettings(id).oauth;
+  if (oauth?.accessToken) return { key: oauth.accessToken, source: 'subscription' };
   for (const name of providerDef(id)?.env ?? []) if (env[name]?.trim()) return { key: env[name]!.trim(), source: `env ${name}` };
   return undefined;
 }

@@ -42,6 +42,17 @@ export function transcript(messages: ModelMessage[], maxToolChars = 2000): strin
   return out.join('\n\n');
 }
 
+/** The summarizer's request must fit the window it is trying to free: past this, only the head and the tail of
+ *  the transcript go in (a summary of both beats an overflowed compaction). */
+const TRANSCRIPT_CAP = 1_200_000; // ~300k tokens
+
+export function capTranscript(text: string, max = TRANSCRIPT_CAP): string {
+  if (text.length <= max) return text;
+  const marker = '\n\n[... the middle of this conversation is omitted so the summary request fits ...]\n\n';
+  const half = Math.max(0, Math.floor((max - marker.length) / 2));
+  return `${text.slice(0, half)}${marker}${text.slice(-half)}`;
+}
+
 const MAX_SUMMARY_TOKENS = 8000;
 
 /**
@@ -80,7 +91,7 @@ export async function summarize(opts: {
   abortSignal?: AbortSignal;
   onProgress?: (p: CompactProgress) => void;
 }): Promise<{ summary: string; inputTokens: number; outputTokens: number }> {
-  const history = transcript(opts.messages);
+  const history = capTranscript(transcript(opts.messages));
   const inputTokens = Math.ceil(history.length / 4);
   const expectedTokens = expectedSummaryTokens(inputTokens);
   const started = performance.now();

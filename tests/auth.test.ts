@@ -131,9 +131,40 @@ describe('/auth', () => {
     expect(config().apiKey).toBe('sk-offline-key-0000');
   });
 
-  it('shows the status, masked, without an argument', async () => {
-    expect((await runCommand(fakeApp().app, '/auth')).output).toMatch(/No API key registered/);
-    const out = (await runCommand(fakeApp('sk-shown-key-5678').app, '/auth')).output!;
+  it('a provider key leads straight into that provider’s own model picker', async () => {
+    const picked: string[] = [];
+    const base = fakeApp().app as unknown as Record<string, unknown>;
+    const app2 = {
+      ...base,
+      config: { providers: {} as Record<string, { apiKey?: string }> },
+      catalog: [
+        { id: 'openai/gpt-test', name: 'gpt-test', format: 'chat', context: 100_000, output: 4_096, reasoning: false, images: false, provider: 'openai', cost: { input: 1, output: 2, cacheRead: 0.1 } },
+        { id: 'anthropic/claude-test', name: 'claude-test', format: 'messages', context: 200_000, output: 8_192, reasoning: true, images: true, provider: 'anthropic', cost: { input: 3, output: 15, cacheRead: 0.3 } },
+      ],
+      agent: { ...(base.agent as Record<string, unknown>), model: { id: 'mimo-v2.6-flash' } },
+      setModel: async (id: string) => void picked.push(id),
+    };
+    const r = await runCommand(app2 as never, '/auth openai sk-test-openai-123');
+    expect(r.output).toContain('Saved the OpenAI key');
+    expect((config().providers as Record<string, { apiKey?: string }> | undefined)?.openai?.apiKey).toBe('sk-test-openai-123');
+    expect(r.choose?.title).toContain('OpenAI');
+    expect(r.choose?.options.map((o) => o.label)).toEqual(['openai/gpt-test']); // only this provider's models
+    const applied = await r.choose!.select(0);
+    expect(picked).toEqual(['openai/gpt-test']);
+    expect(applied.output).toContain('Model set to openai/gpt-test');
+    expect(applied.output).not.toContain('sk-test-openai-123');
+  });
+
+  it('opens the provider list bare; picking OpenCode Go shows its masked status and the key line', async () => {
+    const noKey = await runCommand(fakeApp().app, '/auth');
+    expect(noKey.choose?.options[0]?.label).toBe('opencode-go'); // the default first, then the providers
+    expect(noKey.choose?.options.some((o) => o.label === 'openai')).toBe(true);
+    const status = await noKey.choose!.select(0);
+    expect(status.output).toMatch(/No API key registered/);
+    expect(status.input).toBe('/auth '); // the line comes back for the key (masked while typing)
+
+    const withKey = await runCommand(fakeApp('sk-shown-key-5678').app, '/auth');
+    const out = (await withKey.choose!.select(0)).output!;
     expect(out).toContain(maskKey('sk-shown-key-5678'));
     expect(out).not.toContain('sk-shown-key-5678');
     expect(seen).toEqual([]); // no network for a status query

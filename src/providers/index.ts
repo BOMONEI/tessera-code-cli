@@ -51,10 +51,44 @@ function otherProviderModel(info: ModelInfo): LanguageModel {
   const headers = { 'user-agent': 'tessera-code' };
   switch (def.protocol) {
     case 'openai':
+      // A ChatGPT subscription token drives the Codex backend (its own host and headers), not api.openai.com.
+      if (settings.oauth) {
+        return createOpenAI({
+          baseURL: 'https://chatgpt.com/backend-api/codex',
+          apiKey: key,
+          headers: {
+            ...headers,
+            originator: 'tessera-code',
+            'openai-beta': 'responses=experimental',
+            ...(settings.oauth.accountId ? { 'chatgpt-account-id': settings.oauth.accountId } : {}),
+          },
+          fetch: (input, init) => apiFetch(input, { ...init, body: codexRequestBody(typeof init?.body === 'string' ? init.body : undefined) }),
+        }).responses(model);
+      }
       return createOpenAI({ baseURL, apiKey: key, headers, fetch: apiFetch }).responses(model);
     case 'anthropic':
-      return createAnthropic({ baseURL, apiKey: key, headers, fetch: apiFetch })(model);
+      // A subscription token goes as Authorization: Bearer plus the oauth beta (x-api-key rejects it).
+      return settings.oauth
+        ? createAnthropic({ baseURL, authToken: key, headers: { ...headers, 'anthropic-beta': 'oauth-2025-04-20' }, fetch: apiFetch })(model)
+        : createAnthropic({ baseURL, apiKey: key, headers, fetch: apiFetch })(model);
     case 'chat':
+      // xAI's subscription token only works on the Grok CLI proxy, which speaks the Responses API.
+      if (def.id === 'xai' && settings.oauth) {
+        return createOpenAI({
+          baseURL: 'https://cli-chat-proxy.grok.com/v1',
+          apiKey: key,
+          headers: {
+            ...headers,
+            'x-xai-token-auth': 'xai-grok-cli',
+            'x-authenticateresponse': 'authenticate-response',
+            'x-grok-client-identifier': 'grok-shell',
+            'x-grok-client-version': '1.0.0',
+            'x-grok-client-mode': 'cli',
+            'user-agent': 'grok-cli/1.0.0',
+          },
+          fetch: apiFetch,
+        }).responses(model);
+      }
       return createOpenAICompatible({
         name: def.id,
         baseURL,
@@ -112,6 +146,19 @@ function openCodeGoModel(info: ModelInfo, opts: ProviderOptions): LanguageModel 
       return createOpenAI({ baseURL, apiKey: opts.apiKey, headers, fetch: apiFetch }).responses(info.id);
     case 'chat':
       return createOpenAICompatible({ name: 'opencode-go', baseURL, apiKey: opts.apiKey, headers, includeUsage: true, fetch: apiFetch }).chatModel(info.id);
+  }
+}
+
+/** The Codex backend rejects `max_output_tokens` (400) and expects `store: false`; everything else passes. */
+export function codexRequestBody(body: string | undefined): string | undefined {
+  if (!body) return body;
+  try {
+    const j = JSON.parse(body) as Record<string, unknown>;
+    delete j.max_output_tokens;
+    j.store = false;
+    return JSON.stringify(j);
+  } catch {
+    return body;
   }
 }
 

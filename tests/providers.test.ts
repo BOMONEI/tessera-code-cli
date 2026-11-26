@@ -8,7 +8,7 @@ import { generateText } from 'ai';
 
 const { providerKey, providerIsZdr, setProviderSettings, splitModelId, availableProviders, unknownProviderWarnings } = await import('../src/providers/registry.js');
 const { parseCatalog, withConfiguredModels, findModel, isAllowedModel, modelIsZdr, usableModels, localModels } = await import('../src/providers/catalog.js');
-const { createModel, MissingProviderKeyError, NonZdrModelError } = await import('../src/providers/index.js');
+const { createModel, MissingProviderKeyError } = await import('../src/providers/index.js');
 const { GLOBAL_CONFIG, loadConfig } = await import('../src/config.js');
 const { runCommand } = await import('../src/commands.js');
 const { maskSecretInput, redactSecret, hasSecret } = await import('../src/ui/format.js');
@@ -96,9 +96,9 @@ describe('catalog', () => {
     expect(withConfiguredModels(catalog)).toBe(catalog);
   });
 
-  it('OpenCode Go stays ZDR-only; other providers are allowed and flagged', () => {
+  it('allows any Go model (non-ZDR ones only warn) and any known provider', () => {
     const goNonZdr = catalog.find((m) => m.id === 'gpt-x')!;
-    expect(isAllowedModel(goNonZdr)).toBe(false);
+    expect(isAllowedModel(goNonZdr)).toBe(true);
     const gpt5 = catalog.find((m) => m.id === 'openai/gpt-5')!;
     expect(isAllowedModel(gpt5)).toBe(true);
     expect(modelIsZdr(gpt5)).toBe(false);
@@ -106,9 +106,9 @@ describe('catalog', () => {
   });
 
   it('offers a provider\'s models only once it has a key (or runs locally)', () => {
-    expect(usableModels(catalog).map((m) => m.id)).toEqual(['mimo-v2.6-flash']);
+    expect(usableModels(catalog).map((m) => m.id)).toEqual(['gpt-x', 'mimo-v2.6-flash']); // both Go models, ZDR or not
     setProviderSettings({ openai: { apiKey: 'k' } });
-    expect(usableModels(catalog).map((m) => m.id)).toEqual(['mimo-v2.6-flash', 'openai/gpt-5']);
+    expect(usableModels(catalog).map((m) => m.id)).toEqual(['gpt-x', 'mimo-v2.6-flash', 'openai/gpt-5']);
   });
 
   it('an unknown model of a known provider gets that provider\'s protocol', () => {
@@ -116,8 +116,8 @@ describe('catalog', () => {
     expect(findModel([], 'anthropic/claude-new')).toMatchObject({ provider: 'anthropic', format: 'messages' });
   });
 
-  it('refuses OpenCode Go models outside the ZDR list, and providers without a key', () => {
-    expect(() => createModel(findModel(catalog, 'gpt-x'), { apiKey: 'k', sessionId: 's' })).toThrow(NonZdrModelError);
+  it('builds non-ZDR Go models, and still refuses providers without a key', () => {
+    expect(() => createModel(findModel(catalog, 'gpt-x'), { apiKey: 'k', sessionId: 's' })).not.toThrow();
     expect(() => createModel(findModel(catalog, 'openai/gpt-5'), { apiKey: 'k', sessionId: 's' })).toThrow(MissingProviderKeyError);
     expect(() => createModel(findModel(catalog, 'openai/gpt-5'), { apiKey: 'k', sessionId: 's' })).toThrow(/\/auth openai <key>/);
   });
@@ -240,5 +240,18 @@ describe('thinking-only models', () => {
     efforts.length = 0;
     await generateText({ model: createModel(thinker('plain'), { apiKey: '', sessionId: 's' }), prompt: 'hi', reasoning: 'none' });
     expect(efforts).toEqual(['none']);
+  });
+});
+
+describe('codex request body', () => {
+  it('drops max_output_tokens (the backend 400s on it) and forces store:false', async () => {
+    const { codexRequestBody } = await import('../src/providers/index.js');
+    const out = codexRequestBody(JSON.stringify({ model: 'gpt-5.4', input: [], max_output_tokens: 32_000 }))!;
+    const j = JSON.parse(out) as Record<string, unknown>;
+    expect(j.max_output_tokens).toBeUndefined();
+    expect(j.store).toBe(false);
+    expect(j.model).toBe('gpt-5.4');
+    expect(codexRequestBody(undefined)).toBeUndefined();
+    expect(codexRequestBody('not json')).toBe('not json');
   });
 });

@@ -2,7 +2,20 @@ import { mkdtempSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+// /login and /logout run against a scripted sign-in: no browser, no network.
+vi.mock('../src/oauth.js', () => ({
+  OAUTH_FLOWS: [{ id: 'anthropic', name: 'Anthropic (Claude Pro/Max)' }],
+  oauthFlow: (id: string) => (id === 'anthropic' ? { id: 'anthropic', name: 'Anthropic (Claude Pro/Max)' } : undefined),
+  loginFlow: async () => ({ oauth: { accessToken: 'tok-123', expiresAt: Date.now() + 3_600_000 } }),
+  oauthStatus: () => 'subscription · renews in 1h',
+  forgetProvider: async (config: { providers: Record<string, unknown> }, id: string) => {
+    if (!config.providers[id]) return false;
+    delete config.providers[id];
+    return true;
+  },
+}));
 import type { App } from '../src/app.js';
 import { runCommand } from '../src/commands.js';
 import { HOME_DIR } from '../src/config.js';
@@ -156,5 +169,46 @@ describe('/sessions', async () => {
     expect(removed.output).toContain('Removed sess-aaa');
     expect((await runCommand(app2, '/sessions')).output).not.toContain('sess-aaa');
     expect((await runCommand(app2, '/sessions remove 9')).output).toContain('No session 9');
+  });
+});
+
+describe('/login and /logout', () => {
+  const loginApp = () => {
+    const invalidated: string[] = [];
+    const a = {
+      ...app,
+      config: { providers: {} as Record<string, { apiKey?: string; oauth?: { accessToken: string; expiresAt: number } }> },
+      catalog: [{ id: 'anthropic/claude-test', name: 'claude-test', format: 'messages', context: 200_000, output: 8_192, reasoning: true, images: true, provider: 'anthropic', cost: { input: 3, output: 15, cacheRead: 0.3 } }],
+      setModel: async (_id: string) => {},
+      invalidateModels: () => invalidated.push('x'),
+    };
+    return { a: a as unknown as App, config: a.config, invalidated };
+  };
+
+  it('bare /login opens the provider list', async () => {
+    const { a } = loginApp();
+    const r = await runCommand(a, '/login');
+    expect(r.choose?.options.map((o) => o.label)).toContain('anthropic');
+  });
+
+  it('saves the subscription and opens that provider\'s models', async () => {
+    const { a, config, invalidated } = loginApp();
+    const r = await runCommand(a, '/login anthropic');
+    expect(r.output).toContain('Signed in with');
+    expect(r.output).toContain('subscription');
+    expect(config.providers.anthropic?.oauth?.accessToken).toBe('tok-123');
+    expect(r.choose?.title).toContain('Anthropic');
+    expect(r.choose?.options.map((o) => o.label)).toEqual(['anthropic/claude-test']);
+    expect(invalidated).toEqual(['x']); // the cached clients must drop the old key
+  });
+
+  it('/logout removes the credentials', async () => {
+    const { a, config, invalidated } = loginApp();
+    config.providers.anthropic = { oauth: { accessToken: 't', expiresAt: 1 } };
+    const r = await runCommand(a, '/logout anthropic');
+    expect(r.output).toContain('Removed the saved credentials for anthropic');
+    expect(config.providers.anthropic).toBeUndefined();
+    expect(invalidated).toEqual(['x']);
+    expect((await runCommand(a, '/logout anthropic')).output).toContain('Nothing saved');
   });
 });

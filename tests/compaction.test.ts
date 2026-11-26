@@ -7,6 +7,8 @@ import type { ModelInfo } from '../src/providers/catalog.js';
 // Scripted model: stream calls follow `script`; generate calls (the summarizer) return a fixed summary.
 const prompts: unknown[] = [];
 let failSummary = false;
+/** > 0: the next N stream calls are rejected as a context overflow (HTTP 400), then a connection drop. */
+let contextOverflowLeft = 0;
 const script: Array<'tool' | 'text' | 'slow' | 'bigtext' | 'edit'> = [];
 let slowToolStream: ((c: ReadableStreamDefaultController<LanguageModelV4StreamPart>) => Promise<void>) | undefined;
 const usage = (input: number) => ({
@@ -35,6 +37,15 @@ function mockModel(): LanguageModelV4 {
           { type: 'text-delta', id: 's', delta: 'OF-WORK' },
           { type: 'text-end', id: 's' },
           { type: 'finish', usage: usage(100), finishReason: { unified: 'stop', raw: 'stop' } },
+        ];
+        return { stream: new ReadableStream({ start: (c) => (parts.forEach((p) => c.enqueue(p)), c.close()) }) };
+      }
+      // The provider rejects the context (or the connection dies) before the scripted steps run.
+      if (contextOverflowLeft > 0) {
+        contextOverflowLeft--;
+        const parts: LanguageModelV4StreamPart[] = [
+          { type: 'stream-start', warnings: [] },
+          { type: 'error', error: Object.assign(new Error('prompt is too long: 1200000 tokens > 1000000 maximum'), { statusCode: 400 }) },
         ];
         return { stream: new ReadableStream({ start: (c) => (parts.forEach((p) => c.enqueue(p)), c.close()) }) };
       }
@@ -68,7 +79,7 @@ vi.mock('../src/providers/index.js', async (orig) => ({
 vi.mock('../src/cost/ledger.js', () => ({ recordSpend: async () => {} }));
 
 const { Agent } = await import('../src/agent/agent.js');
-const { pruneToolResults, splitForCompaction } = await import('../src/agent/compact.js');
+const { pruneToolResults, splitForCompaction, capTranscript } = await import('../src/agent/compact.js');
 type AgentEvent = import('../src/agent/agent.js').AgentEvent;
 type AgentEventOf<T extends AgentEvent['type']> = Extract<AgentEvent, { type: T }>;
 
@@ -489,5 +500,34 @@ describe('thinking auto escalates between steps', () => {
     for await (const ev of a.run('do the task')) events.push(ev);
     const infos = events.filter((e) => e.type === 'info').map((e) => (e as { text: string }).text);
     expect(infos.some((t) => t.includes('thinking auto: none → low'))).toBe(true);
+  });
+});
+
+describe('context overflow recovery', () => {
+  it('summarizes and continues when the provider rejects the context', async () => {
+    prompts.length = 0;
+    script.length = 0;
+    contextOverflowLeft = 1;
+    script.push('tool', 'text');
+    const a = agent(300_000);
+    const events: AgentEvent[] = [];
+    for await (const ev of a.run('do the task')) events.push(ev);
+    const infos = events.filter((e) => e.type === 'info').map((e) => (e as { text: string }).text);
+    expect(infos.some((t) => t.includes('context limit reached — compacting and continuing'))).toBe(true);
+    expect(events.some((e) => e.type === 'error')).toBe(false); // the turn did not die at 100%
+    expect(events.at(-1)?.type).toBe('turn-finish');
+    expect(JSON.stringify(a.messages)).toContain('SUMMARY-OF-WORK'); // history restarted from the summary
+    expect(script).toHaveLength(0); // the retried attempt ran the scripted steps
+  });
+
+
+  it('caps the summarizer input to head+tail so compaction itself cannot overflow', () => {
+    const text = 'a'.repeat(500_000) + 'MIDDLE'.padEnd(2_000_000, 'm') + 'z'.repeat(500_000);
+    const capped = capTranscript(text, 10_000);
+    expect(capped.length).toBeLessThanOrEqual(10_000);
+    expect(capped.startsWith('a')).toBe(true);
+    expect(capped.endsWith('z')).toBe(true);
+    expect(capped).toContain('omitted');
+    expect(capTranscript('short', 10_000)).toBe('short');
   });
 });

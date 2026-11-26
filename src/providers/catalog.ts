@@ -189,14 +189,15 @@ export function modelIsZdr(info: Pick<ModelInfo, 'id' | 'provider'>): boolean {
 }
 
 /** Whether a model may be used: OpenCode Go only with ZDR models; other providers always (non-ZDR ones are flagged). */
+/** A model may be used: any Go model (non-ZDR ones only carry a warning now) and any known provider's. */
 export function isAllowedModel(info: Pick<ModelInfo, 'id' | 'provider'>): boolean {
-  return info.provider ? Boolean(providerDef(info.provider)) : isZdr(info.id);
+  return info.provider ? Boolean(providerDef(info.provider)) : true;
 }
 
-/** Models that can be picked now: OpenCode Go's ZDR models and those of providers with a key (or local). */
+/** Models that can be picked now: OpenCode Go's models and those of providers with a key (or local). */
 export function usableModels(catalog: ModelInfo[]): ModelInfo[] {
   const ready = new Set(availableProviders().map((p) => p.id));
-  return catalog.filter((m) => (m.provider ? ready.has(m.provider) : isZdr(m.id)));
+  return catalog.filter((m) => (m.provider ? ready.has(m.provider) : true));
 }
 
 /** Models a local server (Ollama, LM Studio) has right now, from its /models endpoint; [] when it is not running. */

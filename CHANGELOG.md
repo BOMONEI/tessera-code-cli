@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.7.26 — 2026-11-20
+
+### Added
+- **Subscription sign-in: `/login`.** Pick a provider, the browser does the rest (loopback PKCE), and the tokens
+  live in `config.json` — renewed automatically ten minutes before they expire. Four providers: **Anthropic**
+  (Claude Pro/Max; Bearer + the oauth beta header), **OpenRouter** (issues a permanent personal key),
+  **xAI** (Grok; the registered port 56121, the token drives the Grok CLI proxy), **OpenAI** (ChatGPT/Codex; the
+  registered port 1455, the token drives chatgpt.com/backend-api/codex — after sign-in the plan's own model slugs
+  are fetched and offered in the model picker). `/logout <provider>` forgets the credentials; both drop the cached
+  model clients at once. The system prompt names the model's provider instead of always saying "via OpenCode Go".
+- A background subagent's report now wakes the agent on its own when no turn is running (claude-code style): it
+  continues the task with the report folded in, instead of waiting for you to ask.
+
+### Changed
+- Non-ZDR OpenCode Go models are allowed again — the picker, the fallback chain and `/model` all take them; the
+  "not zero-data-retention" warning stays in the UI.
+
+### Fixed
+- A turn that hit the provider's context limit (HTTP 400 "too long") died; it now summarizes the history and
+  continues instead. The summarizer's own request is capped to the head and tail of the conversation, so
+  compaction can no longer overflow the window it is trying to free. A connection that dropped mid-answer no
+  longer ends the turn silently.
+
 ## 0.7.25 — 2026-11-20
 
 ### Fixed
