@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.27 — 2026-11-20
+
+### Fixed
+- Pickers drew a number only for the first nine rows (the digits double as shortcuts) and blanked the rest, so
+  row 10 onward lost its number — every row shows one now.
+- `/auth` no longer stuffs `/auth <provider> ` into the main input: picking a provider opens its own masked box
+  (dots only, enter sends, esc cancels) and continues into the save and that provider's model picker. The OpenCode
+  Go key path uses the same box; `--repl` prints a hint instead (it has no hidden input).
+
 ## 0.7.26 — 2026-11-20
 
 ### Added

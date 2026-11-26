@@ -31,6 +31,8 @@ export interface CommandResult {
   exit?: boolean;
   /** Ask the user to pick one option, then continue with `select`. */
   choose?: Choice;
+  /** Ask for a secret in its own masked box (the /auth key entry), then continue with `run`. */
+  keyPrompt?: { title: string; run: (key: string) => Promise<CommandResult> };
   /** The conversation was replaced (resume, rewind, clear): redraw it. */
   reload?: boolean;
   /** Text to put back into the input box (e.g. the prompt that was rewound). */
@@ -167,15 +169,41 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
     async run(app, arg) {
       const [first = '', second = ''] = arg.trim().split(/\s+/);
       const def = providerDef(first);
-      // Picked from the provider list: hand the line back for the key (it shows as dots while typing).
-      if (first === OPENCODE_GO && !second) {
-        return {
-          input: '/auth ',
-          output: app.agent.apiKey
-            ? `API key ${maskKey(app.agent.apiKey)} · from ${app.apiKeySource}. Paste a new key below to replace it.`
-            : 'No API key registered. Get one at https://opencode.ai (OpenCode Go), then paste the key below.',
-        };
-      }
+      /** Saves a provider's key and opens that provider's model picker. */
+      const saveProviderKey = async (d: NonNullable<typeof def>, value: string): Promise<CommandResult> => {
+        const providers = { ...app.config.providers, [d.id]: { ...app.config.providers[d.id], apiKey: value } };
+        await saveGlobalSetting('providers', providers);
+        app.config.providers = providers;
+        setProviderSettings(providers);
+        const zdr = providerIsZdr(d.id) ? '' : ` ⚠ ${d.name} is not zero-data-retention unless your account has a ZDR agreement (then set "zdr": true for it).`;
+        const pick = await providerModelChoose(app, d.id);
+        // The saved message stays visible above the model picker that opens for this provider.
+        return { output: `Saved the ${d.name} key ${maskKey(value)} to ~/.tessera-code/config.json.${zdr}`, ...(pick?.choose ? { choose: pick.choose } : {}) };
+      };
+      /** Verifies, saves and opens the model picker for the OpenCode Go key. */
+      const saveGoKey = async (value: string): Promise<CommandResult> => {
+        if (/\s/.test(value)) return { output: 'An API key has no spaces. Usage: /auth <key>' };
+        const check = await checkApiKey(value, apiFetch);
+        if (check === 'rejected') return { output: `✗ OpenCode Go rejected ${maskKey(value)}; nothing was saved. Check the key and try again.` };
+        await saveApiKey(value);
+        app.setApiKey(value, '~/.tessera-code/config.json');
+        const env = process.env.OPENCODE_API_KEY ? ' (OPENCODE_API_KEY is set in the environment and will override it on the next start)' : '';
+        const saved =
+          check === 'ok'
+            ? `✓ API key ${maskKey(value)} verified and saved to ~/.tessera-code/config.json${env}.`
+            : `API key ${maskKey(value)} saved to ~/.tessera-code/config.json, but it could not be verified now (network?)${env}.`;
+        const pick = await providerModelChoose(app, OPENCODE_GO);
+        return { output: saved, ...(pick?.choose ? { choose: pick.choose } : {}) };
+      };
+      /** The key box for OpenCode Go: status first, then a masked entry of its own. */
+      const goKeyPrompt = (): CommandResult => ({
+        output: app.agent.apiKey
+          ? `API key ${maskKey(app.agent.apiKey)} · from ${app.apiKeySource}. Paste a new key below to replace it.`
+          : 'No API key registered. Get one at https://opencode.ai (OpenCode Go), then paste the key below.',
+        keyPrompt: { title: 'OpenCode Go API key', run: saveGoKey },
+      });
+      // Picked from the provider list: its own masked box asks for the key.
+      if (first === OPENCODE_GO && !second) return goKeyPrompt();
       if (def) {
         if (!second) {
           if (def.local) {
@@ -184,34 +212,17 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
           }
           const k = providerKey(def.id);
           return {
-            input: `/auth ${def.id} `,
             output: k
               ? `${def.name}: key ${maskKey(k.key)} from ${k.source}. Paste a new key below to replace it.`
-              : `${def.name}: paste the API key below (it shows as dots), then Enter. It is saved to ~/.tessera-code/config.json.`,
+              : `${def.name}: paste the API key below. It is saved to ~/.tessera-code/config.json.`,
+            keyPrompt: { title: `${def.name} API key`, run: (value) => saveProviderKey(def, value) },
           };
         }
-        const providers = { ...app.config.providers, [def.id]: { ...app.config.providers[def.id], apiKey: second } };
-        await saveGlobalSetting('providers', providers);
-        app.config.providers = providers;
-        setProviderSettings(providers);
-        const zdr = providerIsZdr(def.id) ? '' : ` ⚠ ${def.name} is not zero-data-retention unless your account has a ZDR agreement (then set "zdr": true for it).`;
-        const pick = await providerModelChoose(app, def.id);
-        // The saved message stays visible above the model picker that opens for this provider.
-        return { output: `Saved the ${def.name} key ${maskKey(second)} to ~/.tessera-code/config.json.${zdr}`, ...(pick?.choose ? { choose: pick.choose } : {}) };
+        return saveProviderKey(def, second);
       }
       const key = arg.trim();
-      if (/\s/.test(key)) return { output: 'An API key has no spaces. Usage: /auth <key>' };
-      const check = await checkApiKey(key, apiFetch);
-      if (check === 'rejected') return { output: `✗ OpenCode Go rejected ${maskKey(key)}; nothing was saved. Check the key and try again.` };
-      await saveApiKey(key);
-      app.setApiKey(key, '~/.tessera-code/config.json');
-      const env = process.env.OPENCODE_API_KEY ? ' (OPENCODE_API_KEY is set in the environment and will override it on the next start)' : '';
-      const saved =
-        check === 'ok'
-          ? `✓ API key ${maskKey(key)} verified and saved to ~/.tessera-code/config.json${env}.`
-          : `API key ${maskKey(key)} saved to ~/.tessera-code/config.json, but it could not be verified now (network?)${env}.`;
-      const pick = await providerModelChoose(app, OPENCODE_GO);
-      return { output: saved, ...(pick?.choose ? { choose: pick.choose } : {}) };
+      if (!key) return goKeyPrompt();
+      return saveGoKey(key);
     },
     async suggest(app) {
       const go = app.agent.apiKey ? ' · key set' : ' · no key';

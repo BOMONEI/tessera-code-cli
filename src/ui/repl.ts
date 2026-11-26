@@ -156,7 +156,8 @@ export class Repl {
       }
       if (r.output) stdout.write(r.output + '\n');
       for (const d of r.diffs ?? []) stdout.write(`${d.path}\n${colorDiff(d.diff)}\n`);
-      if (r.input) stdout.write(dim(`Previous prompt: ${r.input}\n`));
+      if (r.keyPrompt) stdout.write(dim(`${r.keyPrompt.title}: paste it in the next command, e.g. /auth <provider> <key>\n`));
+      else if (r.input) stdout.write(dim(`Previous prompt: ${r.input}\n`));
       await this.app.saveState();
       if (r.prompt) await this.turn(r.prompt);
       if (r.exit) return 'exit';

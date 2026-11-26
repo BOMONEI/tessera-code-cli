@@ -219,6 +219,31 @@ const OPTIONS: Array<{ key: string; decision: Decision; label: (rule: string) =>
   { key: 'n', decision: 'deny', label: () => 'No, tell the agent what to do differently' },
 ];
 
+/** A secret typed into its own box: nothing is echoed (dots only), enter sends, esc cancels. */
+export function KeyPrompt({ title, onSubmit, onCancel }: { title: string; onSubmit: (key: string) => void; onCancel: () => void }) {
+  const [value, setValue] = useState('');
+  useInput((input, key) => {
+    if (key.escape || (key.ctrl && input === 'c')) onCancel();
+    else if (key.return) {
+      if (value.trim()) onSubmit(value.trim());
+    } else if (key.backspace || key.delete) setValue((v) => v.slice(0, -1));
+    else {
+      const ch = input.replace(/[\x00-\x1f\x7f]/g, '');
+      if (ch) setValue((v) => v + ch);
+    }
+  });
+  return (
+    <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1} marginTop={1}>
+      <Text color="cyan" bold>
+        {title}
+      </Text>
+      <Text>
+        {value ? '●'.repeat(value.length) : <Text dimColor>paste the key, then enter (esc cancels)</Text>}
+      </Text>
+    </Box>
+  );
+}
+
 export function PermissionPrompt({ req, onDecide, onInterrupt }: { req: PermissionRequest; onDecide: (d: Decision) => void; onInterrupt: () => void }) {
   const [index, setIndex] = useState(0);
   const rule = req.saveRule ?? req.rule;
@@ -406,7 +431,7 @@ export function Picker({
           <Text key={i} wrap="truncate">
             <Text color={selected ? 'cyan' : undefined}>
               {selected ? '❯ ' : '  '}
-              {i < 9 ? `${i + 1}. ` : '   '}
+              {`${String(i + 1).padStart(2)}. `}
               {o.label}
             </Text>
             {o.hint ? <Text dimColor>  {o.hint}</Text> : null}

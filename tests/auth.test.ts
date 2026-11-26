@@ -161,13 +161,17 @@ describe('/auth', () => {
     expect(noKey.choose?.options.some((o) => o.label === 'openai')).toBe(true);
     const status = await noKey.choose!.select(0);
     expect(status.output).toMatch(/No API key registered/);
-    expect(status.input).toBe('/auth '); // the line comes back for the key (masked while typing)
+    expect(status.keyPrompt?.title).toBe('OpenCode Go API key'); // its own masked box, not a prefilled line
 
     const withKey = await runCommand(fakeApp('sk-shown-key-5678').app, '/auth');
     const out = (await withKey.choose!.select(0)).output!;
     expect(out).toContain(maskKey('sk-shown-key-5678'));
     expect(out).not.toContain('sk-shown-key-5678');
     expect(seen).toEqual([]); // no network for a status query
+
+    // The key box continues into the normal save path.
+    const applied = await status.keyPrompt!.run('sk-new-key-9999');
+    expect(applied.output).toMatch(/verified and saved/);
   });
 });
 

@@ -28,7 +28,7 @@ import { Input, inputRows as inputRowsOf, visibleCaret } from './Input.js';
 import { applyCompletion, complete, enterAction, type CommandInfo, type CompletionItem } from '../completion.js';
 import { VERSION } from '../../version.js';
 import { suggestFiles } from '../../agent/attachments.js';
-import { HistoryView, PermissionPrompt, Picker, isExpandable, middleEllipsis, type HistoryItem, type NewHistoryItem } from './components.js';
+import { HistoryView, KeyPrompt, PermissionPrompt, Picker, isExpandable, middleEllipsis, type HistoryItem, type NewHistoryItem } from './components.js';
 import type { MouseEvent, MouseInput } from './mouse.js';
 import { buildTranscript, highlight, selectedColumns, selectedText, type Point, type Selection, type Transcript } from './viewport.js';
 
@@ -344,6 +344,8 @@ export function TuiApp({
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState<{ req: PermissionRequest; resolve: (d: Decision) => void } | undefined>();
   const [choice, setChoiceState] = useState<Choice | undefined>();
+  /** A secret asked for in its own box (/auth): masked entry, then the command continues with the result. */
+  const [keyPrompt, setKeyPrompt] = useState<{ title: string; run: (key: string) => Promise<CommandResult> } | undefined>();
   // Mirrors `choice` synchronously: queued prompts must wait while a picker is open.
   const choiceRef = useRef<Choice | undefined>(undefined);
   const setChoice = (c: Choice | undefined) => {
@@ -396,7 +398,7 @@ export function TuiApp({
   const [commands, setCommands] = useState<CommandInfo[]>([]);
   // Argument candidates per command, loaded on first use and dropped after each submit (sessions, models change).
   const [argCache, setArgCache] = useState<Record<string, Array<{ value: string; hint?: string }>>>({});
-  const overlay = Boolean(pending || choice || search);
+  const overlay = Boolean(pending || choice || search || keyPrompt);
   // Computed only when the input changes (not on every streamed token), and not at all after esc dismissed it.
   const typedKey = `${cursor}:${input}`;
   const completion = useMemo(
@@ -866,6 +868,7 @@ export function TuiApp({
       if (r.markdown) push({ kind: 'assistant', markdown: r.markdown });
       for (const d of r.diffs ?? []) push({ kind: 'diff', path: d.path, diff: d.diff, maxLines: 400 });
       if (r.input !== undefined) setInput(r.input);
+      if (r.keyPrompt) setKeyPrompt(r.keyPrompt);
       if (r.choose) setChoice(r.choose);
       if (r.prompt) await runTurn(r.prompt);
     },
@@ -1283,6 +1286,28 @@ export function TuiApp({
             {live.hidden ? <Text dimColor>… {live.hidden} more lines above</Text> : null}
             <Text>{live.text}</Text>
           </Box>
+        ) : null}
+        {keyPrompt ? (
+          <KeyPrompt
+            title={keyPrompt.title}
+            onSubmit={(key) => {
+              const current = keyPrompt;
+              setKeyPrompt(undefined);
+              busyRef.current = true;
+              setBusy(true);
+              void (async () => {
+                try {
+                  await applyResult(await current.run(key));
+                } catch (e) {
+                  push({ kind: 'error', text: String((e as Error).message ?? e) });
+                } finally {
+                  busyRef.current = false;
+                  setBusy(false);
+                }
+              })();
+            }}
+            onCancel={() => setKeyPrompt(undefined)}
+          />
         ) : null}
         {pending ? (
           <PermissionPrompt
