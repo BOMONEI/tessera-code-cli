@@ -354,7 +354,7 @@ All settings, in `~/.tessera-code/config.json` (global) and `.tessera/settings.j
   "notifyAfterSeconds": 20,
   "fallback": { "models": ["glm-5.3-flash", "qwen3.8-flash"], "firstTokenTimeoutMs": 0, "stickyMs": 300000 },
   "maxSteps": 50,
-  "contextLimit": 500000,
+  "contextLimit": 350000,
   "allow": ["bash(npm test *)", "edit"],
   "mcpServers": {
     "fs": { "command": "npx", "args": ["-y", "some-mcp-server"] },
@@ -383,7 +383,7 @@ lists each server with its tools or error.
 
 Project-level `hooks`, `mcpServers`, `allow` and `permissionMode` run code or widen permissions, so they are ignored until you trust the project (asked once per change of those settings; never in `-p` mode). "Always allow" answers are stored per project under `~/.tessera-code/projects/`, not in the repo.
 
-`contextLimit` (default 500k tokens) caps the context. A turn that outgrows it is not cut short: it finishes, and the history is summarized right after it (the progress shows under the answer), so the next prompt starts small. Only when a single turn nears the model's real window (90%) does it compact between tool steps. A prompt that would itself cross the limit compacts first. `/context` shows usage against the limit, `/compact [focus]` compacts on demand.
+`contextLimit` (default 350k tokens) caps the context. A turn that outgrows it is not cut short: it finishes, and the history is summarized right after it (the progress shows under the answer), so the next prompt starts small. Only when a single turn nears the model's real window (90%) does it compact between tool steps. A prompt that would itself cross the limit compacts first. `/context` shows usage against the limit, `/compact [focus]` compacts on demand.
 
 Hooks receive a JSON payload on stdin. Exit `0` continues (stdout becomes context for `UserPromptSubmit`), exit `2` blocks with stderr as the reason.
 

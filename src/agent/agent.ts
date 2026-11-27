@@ -239,6 +239,13 @@ function isTransportError(e: unknown): boolean {
   return !err?.message || /network|socket|ECONN|timeout|terminated|fetch failed/i.test(err.message);
 }
 
+/**
+ * The free prune pass (clearing old tool results, no model call) runs from this share of the limit: the history
+ * hovers under the cap instead of only being cut at it, so requests read less — the summary still happens only
+ * at the limit itself, and only when the free pass was not enough.
+ */
+const PRUNE_AT_FRACTION = 0.8;
+
 export class Agent {
   messages: ModelMessage[];
   model: ModelInfo;
@@ -464,9 +471,10 @@ export class Agent {
       return;
     }
     const incoming = (typeof input === 'string' ? textTokens(input) : estimateTokens(input)) + images.length * IMAGE_TOKENS;
-    if (this.messages.length && this.contextTokens + incoming >= this.contextLimit) {
+    if (this.messages.length && this.contextTokens + incoming >= this.contextLimit * PRUNE_AT_FRACTION) {
       const before = this.contextTokens;
       // The free pass first (claude-code's microcompact): clear old tool results — often enough without a summary.
+      // It now starts at 80% of the limit, so the context hovers below the cap all along (see PRUNE_AT_FRACTION).
       const pruned = pruneToolResults(this.messages);
       if (pruned) {
         this.replaceHistory(pruned);

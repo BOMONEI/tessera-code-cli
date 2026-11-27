@@ -106,7 +106,7 @@ export const DEFAULT_MCP_SERVERS: Record<string, McpServerConfig> = {
 const DEFAULTS: Config = {
   model: DEFAULT_MODEL,
   maxSteps: 50,
-  contextLimit: 500_000,
+  contextLimit: 350_000,
   sessionRetentionDays: 0,
   allow: [],
   mcpServers: {},

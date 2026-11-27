@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.7.31 — 2026-11-27
+
+### Fixed
+- **Pasted content never showed its color** (the fix that landed in 0.7.30 never reached the screen): the input
+  always receives a `mask` function — the identity on every line but a secret one — and the renderer skipped the
+  colors whenever a mask was present at all. It now compares the masked text with the original and hides colors
+  only when the line really was rewritten. While at it: a **short paste is plain text again**, exactly like typing
+  (no color, deleted a character at a time); only a collapsed long paste (`[Pasted text …]`, yellow) and an image
+  (`[Image #1]`, magenta) are marked, and one backspace still removes either whole.
+
+### Changed
+- The default `contextLimit` is **350k** tokens (was 500k): requests read half the context on average, so the
+  first token arrives sooner — the trade is that history is summarized earlier.
+- The free pass that clears old tool results (no model call) now starts at **80% of the limit** instead of only at
+  it: the history hovers under the cap instead of being cut at it, and the summary still happens only at the limit
+  when the free pass was not enough.
+- While the model is being asked for a step, the busy line says what it is reading:
+  `Thinking · reading 298k… 12s (esc interrupt · ctrl+enter cut in)`.
+
 ## 0.7.30 — 2026-11-27
 
 ### Added

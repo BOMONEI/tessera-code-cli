@@ -1381,7 +1381,10 @@ export function TuiApp({
             </Text>
             <Text dimColor>
               {' '}
-              {subagents.length ? `${subagents.filter((s) => s.state === 'running').length} subagent${subagents.length === 1 ? '' : 's'} working` : (status ?? 'Working')}…{' '}
+              {subagents.length
+                ? `${subagents.filter((s) => s.state === 'running').length} subagent${subagents.length === 1 ? '' : 's'} working`
+                : `${status ?? 'Working'}${status === 'Thinking' ? ` · reading ${formatTokens(core.agent.contextTokens)}` : ''}`}
+              …{' '}
               {busySince !== undefined ? `${elapsedLabel(Date.now() - busySince)} ` : ''}(esc interrupt · ctrl+enter cut in)
             </Text>
           </Box>

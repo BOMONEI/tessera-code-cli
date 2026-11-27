@@ -143,7 +143,8 @@ export function backspaceTarget(chunks: PasteChunk[], value: string, at: number)
 }
 
 /**
- * Colored spans of pasted runs and markers over [from, to): green for pasted text, cyan for images. A marker keeps
+ * Colored spans over [from, to): yellow for a collapsed long paste, magenta for images — short pastes are ordinary
+ * text and draw in the default color. A marker keeps
  * its own color where it sits inside a run (the run's span is cut around it); the result is sorted and disjoint.
  */
 export function pasteSpans(value: string, chunks: PasteChunk[], from: number, to: number): Array<{ start: number; end: number; color: string }> {
@@ -151,14 +152,15 @@ export function pasteSpans(value: string, chunks: PasteChunk[], from: number, to
   for (const c of chunks) {
     const start = Math.max(c.start, from);
     const end = Math.min(c.end, to);
-    if (start < end) spans.push({ start, end, color: 'green' });
+    // A run is only ever a rewritten paste (a long one or a dropped image path): both carry a marker, drawn below.
+    if (start < end) spans.push({ start, end, color: 'yellow' });
   }
   const markers: Array<{ start: number; end: number; color: string }> = [];
   for (const m of value.matchAll(/\[(?:Image #\d+|Pasted text #\d+ \+\d+ lines)\]/g)) {
     const start = m.index;
     const end = m.index + m[0].length;
     if (end <= from || start >= to) continue;
-    markers.push({ start: Math.max(start, from), end: Math.min(end, to), color: m[0].startsWith('[Image') ? 'cyan' : 'green' });
+    markers.push({ start: Math.max(start, from), end: Math.min(end, to), color: m[0].startsWith('[Image') ? 'magenta' : 'yellow' });
   }
   if (!markers.length) return spans.sort((a, b) => a.start - b.start);
   const cut: Array<{ start: number; end: number; color: string }> = [];
@@ -238,7 +240,7 @@ export function Input({
   useEffect(() => {
     if (anchorRef.current !== undefined && value !== selectedValue.current) setAnchor(undefined);
   }, [value]);
-  // Pasted runs: drawn green (cyan for images) and removed whole by one backspace. The last value seen keeps the
+  // Pasted runs: only rewritten pastes (a long one or a dropped image path) — drawn yellow / magenta, removed whole by one backspace. The last value seen keeps the
   // bookkeeping aligned — change() moves the runs for its own edit, this effect for a value set from outside.
   const chunksRef = useRef<PasteChunk[]>([]);
   const prevValue = useRef(value);
@@ -277,11 +279,14 @@ export function Input({
     (text) => {
       const { value, at } = withoutSelection();
       const clean = (transformPaste?.(text) ?? text).replace(/\r\n?/g, '\n').replace(/\t/g, '  ');
-      change(value.slice(0, at) + clean + value.slice(at), at + clean.length);
-      if (clean) {
-        // After change(), which moved the older runs for this insertion.
+      // A short paste stays exactly what typing makes: plain text, no run, no color, removed a character at a time.
+      // transformPaste only rewrites long pastes (the placeholder) and dropped image paths — those are runs.
+      if (transformPaste && clean !== text) {
+        change(value.slice(0, at) + clean + value.slice(at), at + clean.length);
         chunksRef.current = [...chunksRef.current, { start: at, end: at + clean.length }].sort((a, b) => a.start - b.start);
+        return;
       }
+      change(value.slice(0, at) + clean + value.slice(at), at + clean.length);
     },
     { isActive: focus },
   );
@@ -470,13 +475,16 @@ export function Input({
     lineStarts.push(acc);
     acc += l.length + 1;
   }
+  // mask is always passed (it is the identity on every line but a secret one): hide the paste colors only when it
+  // actually rewrote the text — otherwise a masked line would draw pasted dots in color.
+  const maskHidesPaste = mask ? mask(value) !== value : false;
   return (
     <Box flexDirection="column">
       {above}
       {lines.map((l, i) => {
         if (!shown(i)) return null;
         const f = folded(l, width);
-        const spans = mask ? [] : pasteSpans(value, chunksRef.current, lineStarts[i]!, lineStarts[i]! + l.length);
+        const spans = maskHidesPaste ? [] : pasteSpans(value, chunksRef.current, lineStarts[i]!, lineStarts[i]! + l.length);
         const cursorOn = focus && !realCursor && i === cursorLine;
         if (!spans.length) {
           // No paste on this line: exactly the drawing as before (caret inverse, plain text otherwise).

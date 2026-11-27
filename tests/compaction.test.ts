@@ -531,3 +531,32 @@ describe('context overflow recovery', () => {
     expect(capTranscript('short', 10_000)).toBe('short');
   });
 });
+
+describe('free prune starts at 80% of the limit', () => {
+  const seed = (): ModelMessage[] => {
+    const msgs: ModelMessage[] = [];
+    for (let i = 0; i < 5; i++) {
+      msgs.push({ role: 'assistant', content: [{ type: 'tool-call', toolCallId: `t${i}`, toolName: 'big', input: {} }] });
+      msgs.push({ role: 'tool', content: [{ type: 'tool-result', toolCallId: `t${i}`, toolName: 'big', output: { type: 'text', value: 'x'.repeat(2000) } }] });
+    }
+    return msgs;
+  };
+
+  it('clears old tool results before the limit is reached, without a summary', async () => {
+    prompts.length = 0;
+    script.push('text');
+    const probe = agent(1_000_000);
+    probe.replaceHistory(seed());
+    const ctx = probe.contextTokens;
+    const a = agent(Math.ceil(ctx / 0.9)); // the history sits between 80% and 100% of this limit
+    a.replaceHistory(seed());
+    expect(a.contextTokens).toBeGreaterThanOrEqual(a.contextLimit * 0.8);
+    expect(a.contextTokens + 1).toBeLessThan(a.contextLimit);
+    const events: AgentEvent[] = [];
+    for await (const ev of a.run('go')) events.push(ev);
+    const infos = events.filter((e) => e.type === 'info').map((e) => (e as { text: string }).text);
+    expect(infos.some((t) => t.includes('older tool results cleared'))).toBe(true); // the free pass ran early
+    expect(events.some((e) => e.type === 'compacted')).toBe(false); // no summary needed
+    expect(a.contextTokens).toBeLessThan(ctx); // the history really shrank
+  });
+});

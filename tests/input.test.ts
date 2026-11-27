@@ -41,7 +41,7 @@ describe('wrapOffsets (input rows never cross the right border)', () => {
   });
 });
 
-describe('pasted runs (colored in the box, removed whole)', () => {
+describe('pasted runs (only rewritten pastes are runs)', () => {
   it('keeps runs before an edit and shifts the ones after it', () => {
     const chunks = [
       { start: 0, end: 5 }, // "paste"
@@ -105,21 +105,22 @@ describe('backspaceTarget', () => {
 });
 
 describe('pasteSpans', () => {
-  it('colors a run green over its range', () => {
-    expect(pasteSpans('hello world', [{ start: 0, end: 5 }], 0, 11)).toEqual([{ start: 0, end: 5, color: 'green' }]);
+  it('colors a rewritten run (a long paste / a dropped path) yellow', () => {
+    expect(pasteSpans('hello world', [{ start: 0, end: 5 }], 0, 11)).toEqual([{ start: 0, end: 5, color: 'yellow' }]);
   });
 
-  it('colors image markers cyan and paste markers green', () => {
-    expect(pasteSpans('[Image #1]', [], 0, 10)).toEqual([{ start: 0, end: 10, color: 'cyan' }]);
-    expect(pasteSpans('[Pasted text #1 +2 lines]', [], 0, 25)).toEqual([{ start: 0, end: 25, color: 'green' }]);
+  it('colors image markers magenta and collapsed long-paste markers yellow', () => {
+    expect(pasteSpans('[Image #1]', [], 0, 10)).toEqual([{ start: 0, end: 10, color: 'magenta' }]);
+    expect(pasteSpans('[Pasted text #1 +2 lines]', [], 0, 25)).toEqual([{ start: 0, end: 25, color: 'yellow' }]);
   });
 
   it('lets a marker keep its color inside a run, and clips to the requested window', () => {
     const spans = pasteSpans('[Image #1] tail', [{ start: 0, end: 15 }], 0, 15);
     expect(spans).toEqual([
-      { start: 0, end: 10, color: 'cyan' },
-      { start: 10, end: 15, color: 'green' },
+      { start: 0, end: 10, color: 'magenta' },
+      { start: 10, end: 15, color: 'yellow' },
     ]);
-    expect(pasteSpans('hello', [{ start: 0, end: 5 }], 2, 4)).toEqual([{ start: 2, end: 4, color: 'green' }]);
+    // A plain run without a marker is a rewritten paste: yellow.
+    expect(pasteSpans('hello', [{ start: 0, end: 5 }], 2, 4)).toEqual([{ start: 2, end: 4, color: 'yellow' }]);
   });
 });
