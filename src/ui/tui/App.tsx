@@ -866,6 +866,11 @@ export function TuiApp({
       forceRender((n) => n + 1);
       void core.saveState().catch(() => {});
       if (r.exit) return exit();
+      if (r.restart) {
+        // /update installed a new version: cli respawns into it (resuming this session) once the terminal is restored.
+        core.restart = { sessionId: agent.messages.length ? agent.sessionId : undefined };
+        return exit();
+      }
       if (r.reload) {
         supersededRef.current = true;
         return onReload(r.output ? [r.output] : [], r.input, queueRef.current.splice(0));

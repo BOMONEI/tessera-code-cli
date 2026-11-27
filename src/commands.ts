@@ -23,6 +23,23 @@ import type { RewindMode } from './session/checkpoints.js';
 import { INTERJECTION_PREFIX } from './agent/agent.js';
 import { readChangelog } from './changelog.js';
 import { VERSION } from './version.js';
+import { runUpdate } from './update.js';
+import {
+  ACCOUNT_PORT,
+  SYNC_KEYS,
+  accountRefreshDue,
+  accountStatus,
+  applySyncable,
+  backupConfig,
+  forgetAccount,
+  loginAccount,
+  normalizeServer,
+  pickSyncable,
+  pushSettings,
+  pullSettings,
+  refreshAccount,
+  saveAccount,
+} from './account.js';
 
 export interface CommandResult {
   output?: string;
@@ -33,6 +50,8 @@ export interface CommandResult {
   choose?: Choice;
   /** Ask for a secret in its own masked box (the /auth key entry), then continue with `run`. */
   keyPrompt?: { title: string; run: (key: string) => Promise<CommandResult> };
+  /** The update installed a new version: the TUI closes this session and reopens it in the new code. */
+  restart?: boolean;
   /** The conversation was replaced (resume, rewind, clear): redraw it. */
   reload?: boolean;
   /** Text to put back into the input box (e.g. the prompt that was rewound). */
@@ -650,6 +669,96 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
       return Object.entries(app.config.providers)
         .filter(([, v]) => v.apiKey || v.oauth)
         .map(([id]) => ({ value: id, hint: providerDef(id)?.name ?? id }));
+    },
+  },
+  {
+    name: 'update',
+    description: 'update tessera-code: latest release, or a specific version — then this session reopens in it',
+    argHint: '[version]',
+    async run(app, arg) {
+      const want = arg.trim();
+      if (want && !/^v?\d+\.\d+\.\d+$/.test(want)) return { output: `Usage: /update or /update <version> — e.g. /update ${VERSION}.` };
+      if (app.isBusy?.()) return { output: 'A task is running — wait for it to finish (esc interrupts it), then run /update again.' };
+      const lines: string[] = [];
+      let installed = false;
+      try {
+        const code = await runUpdate(VERSION, { target: want || undefined }, {
+          write: (t) => lines.push(t.replace(/\n+$/, '')),
+          onInstalled: () => { installed = true; },
+        });
+        const output = lines.join('\n');
+        return code === 0 && installed ? { output, restart: true } : { output };
+      } catch (e) {
+        return { output: [`Update failed: ${(e as Error).message}`, lines.join('\n')].filter(Boolean).join('\n') };
+      }
+    },
+  },
+  {
+    name: 'account',
+    description: 'sign in with your AI Chat account: settings travel between machines (login · push · pull · logout)',
+    argHint: '[login [server] | push | pull | logout]',
+    async run(app, arg) {
+      const [sub = '', extra = ''] = arg.trim().split(/\s+/);
+      const a = app.config.account;
+      if (!sub) {
+        const status = accountStatus(a);
+        return {
+          output: status
+            ? `Signed in: ${status}\nTravels with the account: ${SYNC_KEYS.join(', ')}\nNever synced: providers (keys), mcp, hooks, tokens.\nCommands: /account push · /account pull · /account logout`
+            : [
+                'Not signed in. /account login <server> binds your settings to your AI Chat account:',
+                '  /account login http://127.0.0.1:8000   (or your deployed domain)',
+                'Without it everything works exactly as now — local config.json only.',
+              ].join('\n'),
+        };
+      }
+      if (sub === 'login') {
+        const server = normalizeServer(extra || a?.server || 'http://127.0.0.1:8000');
+        if (!/^https?:\/\//.test(server)) return { output: 'The server needs http(s):// — e.g. /account login https://your-domain or http://127.0.0.1:8000.' };
+        try {
+          const account = await loginAccount(server);
+          await saveAccount(app.config, account);
+          return {
+            output: `Signed in as ${account.user?.email ?? account.user?.name ?? account.server} (${account.server}).\nThen: /account push sends these settings · /account pull takes the server's.`,
+          };
+        } catch (e) {
+          return {
+            output: `Sign-in failed: ${(e as Error).message}\nOne-time setup if Google showed redirect_uri_mismatch: add http://127.0.0.1:${ACCOUNT_PORT}/callback as a redirect URI of the OAuth client, then /account login again.`,
+          };
+        }
+      }
+      if (sub === 'logout') {
+        const had = await forgetAccount(app.config);
+        return { output: had ? 'Signed out on this machine. The settings stay on the server.' : 'Not signed in.' };
+      }
+      if (sub !== 'push' && sub !== 'pull') return { output: 'Usage: /account [login [server] | push | pull | logout]' };
+      if (!a?.accessToken) return { output: 'Not signed in — run /account login <server> first.' };
+      // A session close to expiry renews first (same silent policy as provider tokens).
+      const acc = accountRefreshDue(a) ? (await refreshAccount(a)) ?? a : a;
+      if (accountRefreshDue(acc)) return { output: 'The session could not be renewed — run /account login again.' };
+      if (sub === 'push') {
+        try {
+          await pushSettings(acc, app.config);
+        } catch (e) {
+          return { output: (e as Error).message };
+        }
+        acc.syncedAt = Date.now();
+        await saveAccount(app.config, acc);
+        return { output: `Pushed ${Object.keys(pickSyncable(app.config)).length} settings to ${acc.server} (providers, mcp, hooks and tokens stay local).` };
+      }
+      let incoming: Record<string, unknown>;
+      try {
+        incoming = await pullSettings(acc);
+      } catch (e) {
+        return { output: (e as Error).message };
+      }
+      const backup = await backupConfig();
+      const changed = applySyncable(app.config, incoming);
+      for (const k of changed) await saveGlobalSetting(k, (app.config as unknown as Record<string, unknown>)[k]);
+      acc.syncedAt = Date.now();
+      await saveAccount(app.config, acc);
+      const note = changed.length ? `Changed: ${changed.join(', ')}${backup ? ` · backup: ${backup}` : ''}\nNew sessions pick these up; the current one keeps its model until /model.` : `Nothing to change${backup ? ` · backup: ${backup}` : ''}.`;
+      return { output: `Pulled settings from ${acc.server}. ${note}` };
     },
   },
   {

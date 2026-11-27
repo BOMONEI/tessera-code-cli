@@ -24,6 +24,8 @@ export interface OAuthFlow {
   port?: number;
   /** Callback path on that port (default /callback). */
   callbackPath?: string;
+  /** The callback must echo exactly the state that was sent (the account sign-in refuses anything else). */
+  requireState?: boolean;
   /** The URL the browser opens for this sign-in. */
   authorizeUrl: (redirect: string, challenge: string, state: string) => string;
   /** Swaps the code for tokens (or, for OpenRouter, for a permanent personal key). */
@@ -110,7 +112,9 @@ export async function loginFlow(
     const redirect = await loop.redirect;
     const url = flow.authorizeUrl(redirect, challenge, state);
     await (opts.onAuthorize ?? ((u: string) => openBrowser(u)))(url);
-    const { code } = await loop.result;
+    const { code, state: echoed } = await loop.result;
+    // A forged loopback hit carries no (or someone else's) state: refuse it when the flow asked to be strict.
+    if (flow.requireState && echoed !== verifier) throw new Error('The sign-in response did not echo this session\u2019s state — refusing it. Run /account login again.');
     return await flow.exchange(code, verifier, redirect, state, opts.fetch ?? fetch);
   } finally {
     loop.close();

@@ -25,18 +25,20 @@ function github(latest: string | undefined, files: Record<string, string> = {}) 
   return { fetchFn, requested };
 }
 
-function run(current: string, gh: ReturnType<typeof github>, opts: { check?: boolean; source?: boolean } = {}) {
+function run(current: string, gh: ReturnType<typeof github>, opts: { check?: boolean; source?: boolean; target?: string } = {}) {
   let out = '';
+  let installed = false;
   const installs: Array<{ script: string; version: string }> = [];
   const npmInstalls: Array<{ tarball: string; version: string }> = [];
-  const result = runUpdate(current, { check: opts.check }, {
+  const result = runUpdate(current, { check: opts.check, target: opts.target }, {
     write: (t) => (out += t),
     fetch: gh.fetchFn,
     sourceCheckout: opts.source ?? false,
     runInstaller: async (script, version) => (installs.push({ script, version }), 0),
     runTarballInstall: async (tarball, version) => (npmInstalls.push({ tarball, version }), 0),
+    onInstalled: () => { installed = true; },
   });
-  return result.then((code) => ({ code, out, installs, npmInstalls }));
+  return result.then((code) => ({ code, out, installs, npmInstalls, installed }));
 }
 
 describe('latestVersion', () => {
@@ -102,6 +104,39 @@ describe('tessera-code update', () => {
     expect(r.code).toBe(1);
     expect(r.out).toMatch(/git pull && npm ci && npm run build/);
     expect(r.installs).toEqual([]);
+  });
+
+  it('installs the version asked for, pinned (v-prefix ok), and reports the install', async () => {
+    const r = await run('0.3.0', release('0.3.1'), { target: 'v0.3.1' });
+    expect(r.code).toBe(0);
+    expect(r.installed).toBe(true);
+    expect(r.out).toMatch(/Update available: 0\.3\.0 → 0\.3\.1/);
+    expect(r.out).toMatch(/Updated 0\.3\.0 → 0\.3\.1/);
+    if (process.platform === 'win32') expect(r.npmInstalls[0]?.version).toBe('0.3.1');
+    else expect(r.installs).toEqual([{ script: SCRIPT, version: '0.3.1' }]);
+  });
+
+  it('does nothing when asked for the version already installed', async () => {
+    const r = await run('0.3.1', release('0.3.1'), { target: '0.3.1' });
+    expect(r.code).toBe(0);
+    expect(r.out).toMatch(/Already on tessera-code 0\.3\.1/);
+    expect(r.installs).toEqual([]);
+    expect(r.installed).toBe(false);
+  });
+
+  it('downgrades to the version asked for', async () => {
+    const r = await run('0.3.1', release('0.3.0'), { target: '0.3.0' });
+    expect(r.code).toBe(0);
+    expect(r.installed).toBe(true);
+    expect(r.out).toMatch(/Downgrading: 0\.3\.1 → 0\.3\.0/);
+    expect(r.out).toMatch(/Updated 0\.3\.1 → 0\.3\.0/);
+    if (process.platform !== 'win32') expect(r.installs[0]?.version).toBe('0.3.0');
+  });
+
+  it('rejects a target that is not a version', async () => {
+    let out = '';
+    await expect(runUpdate('0.3.0', { target: 'abc' }, { write: (t) => (out += t), sourceCheckout: false })).rejects.toThrow(/Not a version/);
+    expect(out).toBe('');
   });
 
   it('passes the installer\'s failure on', async () => {

@@ -1,6 +1,24 @@
 # Changelog
 
-## 0.7.29 — 2026-11-20
+## 0.7.30 — 2026-11-27
+
+### Added
+- **`/update [version]`** — installs the latest release, or the named one (`v` prefix ok; a downgrade only when
+  asked, `Already on …` when it is the current one) — but only while no task is running. After a **successful**
+  install the TUI closes the session and reopens it in the new version, resuming the same session: the terminal is
+  restored first, then a fresh process takes over with `-r <sessionId>`. A failed install, a source checkout or an
+  up-to-date version just reports and stays put.
+- **`/account`** — sign in with your AI Chat account (Google, loopback `http://127.0.0.1:38471/callback`, strict
+  state check; the backend holds the client secret). `push`/`pull` move a **whitelist of 16 non-secret settings**
+  between machines — providers (keys), mcp, hooks and the tokens never leave the machine, `pull` copies
+  `config.json` aside first, and the session renews ten minutes before expiry like provider tokens. Without
+  signing in, everything works exactly as before. (Backend side: `user_settings` table + `GET/PUT /api/settings`
+  in the ai-chat project.)
+- The input box colors what you paste, codex style: **pasted text in green**, **image markers (`[Image #1]`) in
+  cyan** — and one backspace at the end of a pasted run or marker removes it whole (typing inside a paste turns
+  it into ordinary text).
+
+## 0.7.29 — 2026-11-20 — 2026-11-20
 
 ### Changed
 - The `task`, `tasks` and `tail` tool calls no longer draw a line in the conversation: subagent plumbing stays out

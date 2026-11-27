@@ -22,6 +22,7 @@ import { skillTools } from './tools/skill.js';
 import { SUBAGENT_ROLES, taskTool, type SubagentBlock, type SubagentProgress } from './tools/task.js';
 import { discoverSkills, type Skill } from './skills.js';
 import { refreshDueProviders } from './oauth.js';
+import { accountRefreshDue, refreshAccount } from './account.js';
 import { attachMentionedFiles } from './agent/attachments.js';
 import { HookRunner } from './hooks.js';
 import { connectMcp, type McpConnection, type McpServerStatus } from './mcp.js';
@@ -72,6 +73,11 @@ export interface App {
   onTaskProgress?: (p: SubagentProgress) => void;
   /** Set by the UI: an uncollected subagent report finished while idle — the agent continues on its own. */
   onAutoTurn?: (prompt: string) => void;
+  /** True while a turn runs — commands that need an idle session check this (/update refuses mid-turn). */
+  isBusy?: () => boolean;
+  /** Set by /update after it installed a new version: the CLI hands the terminal to a fresh process that
+   *  resumes this session (TUI only; the REPL prints a note and stays). */
+  restart?: { sessionId?: string } | undefined;
   /** Drops the cached provider clients (after /login, /logout or a token refresh). */
   invalidateModels(): void;
   /** Switches the permission mode and makes it the default everywhere ("permissionMode" in config.json). */
@@ -471,6 +477,7 @@ export async function createApp(opts: AppOptions): Promise<App> {
     async reloadInstructions() {
       agent.system = await systemPrompt(agent.model.id);
     },
+    isBusy: () => running,
     agentsMode: () => (config.multiAgent ? 'multi' : config.subagents ? 'subagents' : 'single'),
     async setAgentsMode(mode) {
       config.subagents = mode !== 'single';
@@ -516,6 +523,14 @@ export async function createApp(opts: AppOptions): Promise<App> {
       running = true;
       // A subscription token close to expiry is renewed before the request goes out (best effort).
       if (await refreshDueProviders(config)) agent.invalidateModels();
+      // The account session (settings sync) renews the same way: silently, never failing the turn.
+      if (config.account && accountRefreshDue(config.account)) {
+        const next = await refreshAccount(config.account);
+        if (next) {
+          config.account = next;
+          await saveGlobalSetting('account', next).catch(() => {});
+        }
+      }
       const firstTurn = !agent.messages.length && !title;
       let started = false;
       let summary: Extract<AgentEvent, { type: 'turn-finish' }> | undefined;

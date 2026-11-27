@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { Command, Option } from 'commander';
+import { spawn } from 'node:child_process';
 import { stdout, stderr } from 'node:process';
 import type { App } from './app.js';
 import { VERSION } from './version.js';
@@ -155,8 +156,29 @@ program
         if (mouse) stdout.write(MOUSE_OFF);
         await app.store.sync(app.agent);
         await app.saveState();
-        if (app.agent.messages.length) stdout.write(dim(`Resume with: tessera-code -r ${app.agent.sessionId.slice(0, 8)}${app.title ? `  (${app.title})` : ''}\n`));
+        const restart = app.restart;
+        if (app.agent.messages.length && !restart) stdout.write(dim(`Resume with: tessera-code -r ${app.agent.sessionId.slice(0, 8)}${app.title ? `  (${app.title})` : ''}\n`));
         await app.close();
+        if (restart) {
+          // /update installed a new version and the terminal is restored: hand the session to a fresh process.
+          const argv = process.argv.slice(1);
+          const args: string[] = [];
+          for (let i = 0; i < argv.length; i++) {
+            const a = argv[i]!;
+            if (a === '-r' || a === '--resume') {
+              if (i + 1 < argv.length && !argv[i + 1]!.startsWith('-')) i++; // the old session id goes too
+              continue;
+            }
+            if (a === '-c' || a === '--continue' || a.startsWith('--resume=')) continue;
+            args.push(a);
+          }
+          if (restart.sessionId) args.push('-r', restart.sessionId);
+          try {
+            spawn(process.execPath, args, { stdio: 'inherit' });
+          } catch {
+            stdout.write(dim('Updated — start tessera-code again to use the new version.\n'));
+          }
+        }
         process.exit(); // don't linger for background work (MCP servers still starting, connection pool)
       }
     } finally {

@@ -97,6 +97,82 @@ export function selectionRange(anchor: number | undefined, cursor: number): { st
   return { start: Math.min(anchor, cursor), end: Math.max(anchor, cursor) };
 }
 
+/** A pasted run in the input: [start, end) in value offsets. It is colored and removed whole by one backspace. */
+export type PasteChunk = { start: number; end: number };
+
+/**
+ * Moves the pasted runs for one edit (found as a common prefix/suffix diff): runs before it stay, runs after it
+ * shift, a pure insertion right before a run keeps it (typing after a paste), and anything that reaches inside a
+ * run leaves it as ordinary text. Also used for a value set from outside (history, an attached image, a command).
+ */
+export function adjustChunks(chunks: PasteChunk[], prev: string, next: string): PasteChunk[] {
+  if (prev === next || !chunks.length) return chunks;
+  const min = Math.min(prev.length, next.length);
+  let p = 0;
+  while (p < min && prev[p] === next[p]) p++;
+  let s = 0;
+  while (s < min - p && prev[prev.length - 1 - s] === next[next.length - 1 - s]) s++;
+  const start = p;
+  const prevEnd = prev.length - s;
+  const nextEnd = next.length - s;
+  const delta = nextEnd - prevEnd;
+  const edited = prevEnd - start; // 0: a pure insertion
+  const out: PasteChunk[] = [];
+  for (const c of chunks) {
+    if (c.end <= start) out.push(c);
+    else if (c.start >= prevEnd) out.push({ start: c.start + delta, end: c.end + delta });
+    else if (edited === 0 && c.start === start) out.push({ start: c.start + (nextEnd - start), end: c.end + (nextEnd - start) });
+    // reaches inside the run: it is ordinary text from here
+  }
+  return out;
+}
+
+/**
+ * What one backspace removes: the pasted run ending at the caret (whole, in one press), else the marker just
+ * before it ("[Image #1]" / "[Pasted text #1 +42 lines]" with its trailing space), else undefined — one character.
+ * The caret inside a run returns undefined: editing the paste turns it into ordinary text.
+ */
+export function backspaceTarget(chunks: PasteChunk[], value: string, at: number): { start: number; end: number } | undefined {
+  if (at <= 0) return undefined;
+  for (const c of chunks) {
+    if (c.end === at && c.start < at) return c;
+    if (at > c.start && at < c.end) return undefined;
+  }
+  const m = /\[(?:Image #\d+|Pasted text #\d+ \+\d+ lines)\] ?$/.exec(value.slice(0, at));
+  return m ? { start: at - m[0].length, end: at } : undefined;
+}
+
+/**
+ * Colored spans of pasted runs and markers over [from, to): green for pasted text, cyan for images. A marker keeps
+ * its own color where it sits inside a run (the run's span is cut around it); the result is sorted and disjoint.
+ */
+export function pasteSpans(value: string, chunks: PasteChunk[], from: number, to: number): Array<{ start: number; end: number; color: string }> {
+  const spans: Array<{ start: number; end: number; color: string }> = [];
+  for (const c of chunks) {
+    const start = Math.max(c.start, from);
+    const end = Math.min(c.end, to);
+    if (start < end) spans.push({ start, end, color: 'green' });
+  }
+  const markers: Array<{ start: number; end: number; color: string }> = [];
+  for (const m of value.matchAll(/\[(?:Image #\d+|Pasted text #\d+ \+\d+ lines)\]/g)) {
+    const start = m.index;
+    const end = m.index + m[0].length;
+    if (end <= from || start >= to) continue;
+    markers.push({ start: Math.max(start, from), end: Math.min(end, to), color: m[0].startsWith('[Image') ? 'cyan' : 'green' });
+  }
+  if (!markers.length) return spans.sort((a, b) => a.start - b.start);
+  const cut: Array<{ start: number; end: number; color: string }> = [];
+  for (const sp of spans) {
+    let pos = sp.start;
+    for (const mk of markers.filter((m) => m.start < sp.end && m.end > sp.start).sort((a, b) => a.start - b.start)) {
+      if (pos < mk.start) cut.push({ start: pos, end: mk.start, color: sp.color });
+      pos = Math.max(pos, mk.end);
+    }
+    if (pos < sp.end) cut.push({ start: pos, end: sp.end, color: sp.color });
+  }
+  return [...cut, ...markers].sort((a, b) => a.start - b.start);
+}
+
 /**
  * Controlled multi-line input. Shift+arrows / shift+home/end select text (typing or backspace replaces it, ctrl+c
  * copies it); ctrl+c without a selection clears the input. Enter submits; shift+enter (kitty-protocol terminals), option/alt+enter or a
@@ -162,7 +238,19 @@ export function Input({
   useEffect(() => {
     if (anchorRef.current !== undefined && value !== selectedValue.current) setAnchor(undefined);
   }, [value]);
+  // Pasted runs: drawn green (cyan for images) and removed whole by one backspace. The last value seen keeps the
+  // bookkeeping aligned — change() moves the runs for its own edit, this effect for a value set from outside.
+  const chunksRef = useRef<PasteChunk[]>([]);
+  const prevValue = useRef(value);
+  useEffect(() => {
+    if (value !== prevValue.current) {
+      chunksRef.current = adjustChunks(chunksRef.current, prevValue.current, value);
+      prevValue.current = value;
+    }
+  });
   const change = (v: string, c: number) => {
+    chunksRef.current = adjustChunks(chunksRef.current, prevValue.current, v);
+    prevValue.current = v;
     latest.current = { value: v, cursor: c };
     if (anchorRef.current !== undefined) setAnchor(undefined);
     onChange(v, c);
@@ -190,6 +278,10 @@ export function Input({
       const { value, at } = withoutSelection();
       const clean = (transformPaste?.(text) ?? text).replace(/\r\n?/g, '\n').replace(/\t/g, '  ');
       change(value.slice(0, at) + clean + value.slice(at), at + clean.length);
+      if (clean) {
+        // After change(), which moved the older runs for this insertion.
+        chunksRef.current = [...chunksRef.current, { start: at, end: at + clean.length }].sort((a, b) => a.start - b.start);
+      }
     },
     { isActive: focus },
   );
@@ -263,6 +355,11 @@ export function Input({
       if (key.home || (key.ctrl && input === 'a')) return move(at - pos.col, false);
       if (key.end || (key.ctrl && input === 'e')) return move(at - pos.col + pos.lines[pos.line]!.length, false);
       if (key.backspace || key.delete) {
+        // A pasted run (or the marker before the caret) goes in one press; inside a run it is a normal character.
+        if (key.backspace) {
+          const target = backspaceTarget(chunksRef.current, value, at);
+          if (target) return change(value.slice(0, target.start) + value.slice(target.end), target.start);
+        }
         if (at > 0) change(value.slice(0, at - 1) + value.slice(at), at - 1);
         return;
       }
@@ -285,6 +382,7 @@ export function Input({
       if (input.includes('\x16')) onImagePaste?.();
       const keys = input.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '');
       if (!keys) return;
+      const asPaste = keys.length > 1 && !/\r/.test(keys) && Boolean(transformPaste);
       const burst = keys.length > 1 && !/\r/.test(keys) && transformPaste ? transformPaste(keys) : keys;
       const segments = burst.replace(/\r\n?/g, '\r').replace(/\t/g, '  ').split('\r');
       let before = value.slice(0, at);
@@ -303,6 +401,11 @@ export function Input({
       before += segments.at(-1)!;
       if (submitted && !before && !after) return;
       change(before + after, before.length);
+      // One burst of keys without bracketed paste (dropped files, a long paste → placeholder) is a run too — but a
+      // burst transformPaste left alone was fast typing, not a paste.
+      if (asPaste && !submitted && !sel && burst !== keys && before.length > at) {
+        chunksRef.current = [...chunksRef.current, { start: at, end: before.length }].sort((a, b) => a.start - b.start);
+      }
     },
     { isActive: focus },
   );
@@ -360,21 +463,74 @@ export function Input({
       </Box>
     );
   }
+  // Global offsets of each line, so runs and markers are found in the value's own coordinates.
+  const lineStarts: number[] = [];
+  let acc = 0;
+  for (const l of lines) {
+    lineStarts.push(acc);
+    acc += l.length + 1;
+  }
   return (
     <Box flexDirection="column">
       {above}
       {lines.map((l, i) => {
         if (!shown(i)) return null;
         const f = folded(l, width);
-        return focus && !realCursor && i === cursorLine ? (
+        const spans = mask ? [] : pasteSpans(value, chunksRef.current, lineStarts[i]!, lineStarts[i]! + l.length);
+        const cursorOn = focus && !realCursor && i === cursorLine;
+        if (!spans.length) {
+          // No paste on this line: exactly the drawing as before (caret inverse, plain text otherwise).
+          return cursorOn ? (
+            <Text key={i} wrap="hard">
+              {f.text.slice(0, f.at(col))}
+              <Text inverse>{l[col] ?? ' '}</Text>
+              {col < l.length ? f.text.slice(f.at(col) + 1) : ''}
+            </Text>
+          ) : (
+            <Text key={i} wrap="hard">
+              {f.text || ' '}
+            </Text>
+          );
+        }
+        // A pasted run or marker sits on this line: draw it in colored pieces, split around the caret.
+        const base = lineStarts[i]!;
+        const edges = new Set<number>([0, l.length]);
+        for (const sp of spans) {
+          edges.add(sp.start - base);
+          edges.add(sp.end - base);
+        }
+        if (cursorOn) edges.add(col);
+        const xs = [...edges].filter((x) => x >= 0 && x <= l.length).sort((a, b) => a - b);
+        const colorOf = (a: number, b: number) => spans.find((sp) => a >= sp.start - base && b <= sp.end - base)?.color;
+        return (
           <Text key={i} wrap="hard">
-            {f.text.slice(0, f.at(col))}
-            <Text inverse>{l[col] ?? ' '}</Text>
-            {col < l.length ? f.text.slice(f.at(col) + 1) : ''}
-          </Text>
-        ) : (
-          <Text key={i} wrap="hard">
-            {f.text || ' '}
+            {xs.slice(0, -1).flatMap((a, k) => {
+              const b = xs[k + 1]!;
+              if (b <= a) return [];
+              if (cursorOn && a <= col && col < b) {
+                return [
+                  a < col ? (
+                    <Text key={`h${k}`} color={colorOf(a, col)}>
+                      {f.text.slice(f.at(a), f.at(col))}
+                    </Text>
+                  ) : null,
+                  <Text key={`c${k}`} inverse>
+                    {l[col] ?? ' '}
+                  </Text>,
+                  col + 1 < b ? (
+                    <Text key={`t${k}`} color={colorOf(col + 1, b)}>
+                      {f.text.slice(f.at(col + 1), f.at(b))}
+                    </Text>
+                  ) : null,
+                ];
+              }
+              return [
+                <Text key={k} color={colorOf(a, b)}>
+                  {f.text.slice(f.at(a), f.at(b))}
+                </Text>,
+              ];
+            })}
+            {cursorOn && col >= l.length ? <Text inverse> </Text> : null}
           </Text>
         );
       })}

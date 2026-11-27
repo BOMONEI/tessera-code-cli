@@ -16,6 +16,21 @@ export const DEFAULT_MODEL = 'mimo-v2.6-flash';
 // See README "Fallback".
 export const DEFAULT_FALLBACK = ['glm-5.3-flash', 'qwen3.8-flash'];
 
+/** A signed-in AI Chat account (src/account.ts): the identity that carries settings between machines. */
+export interface AccountState {
+  /** Backend base URL (http://127.0.0.1:8000 or the deployed domain). */
+  server: string;
+  /** Google OAuth client id; defaults to the backend's (public value). */
+  clientId?: string;
+  accessToken?: string;
+  refreshToken?: string;
+  /** Epoch ms; renewed ten minutes before it passes (the backend's access TTL is 60 minutes). */
+  expiresAt?: number;
+  user?: { id?: string; email?: string; name?: string };
+  /** Epoch ms of the last successful push/pull. */
+  syncedAt?: number;
+}
+
 export interface Config {
   model: string;
   /** Upper bound on agent steps (LLM calls) per user turn. */
@@ -56,6 +71,8 @@ export interface Config {
   multiAgent: boolean;
   /** Other model providers: { "<id>": { apiKey?, baseURL?, zdr?, models? } } (see providers/registry.ts). Global config only. */
   providers: Record<string, ProviderSettings>;
+  /** Signed-in AI Chat account: non-secret settings travel with it (providers, mcp, hooks and tokens never do). */
+  account?: AccountState;
 }
 
 export interface FallbackConfig {

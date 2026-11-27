@@ -4,6 +4,26 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
+// /update runs against a scripted installer: no network, no real npm call.
+vi.mock('../src/update.js', () => ({ runUpdate: vi.fn() }));
+// /account runs against a scripted backend: no browser, no network.
+vi.mock('../src/account.js', () => ({
+  ACCOUNT_PORT: 38471,
+  SYNC_KEYS: ['model', 'thinking'],
+  normalizeServer: (s: string) => s.trim().replace(/\/+$/, ''),
+  accountStatus: (a?: { accessToken?: string; user?: { email?: string }; server?: string }) =>
+    a?.accessToken ? `${a.user?.email ?? 'signed in'} · ${a.server}` : undefined,
+  accountRefreshDue: () => false,
+  loginAccount: async (server: string) => ({ server, accessToken: 'at', refreshToken: 'rt', expiresAt: Date.now() + 1000, user: { email: 'me@x.y' } }),
+  refreshAccount: async (a: unknown) => a,
+  pushSettings: async () => {},
+  pullSettings: async () => ({ model: 'm2' }),
+  pickSyncable: () => ({ model: 'm2' }),
+  applySyncable: () => ['model'],
+  backupConfig: async () => '/tmp/config.json.bak-1',
+  saveAccount: async () => {},
+  forgetAccount: async () => true,
+}));
 // /login and /logout run against a scripted sign-in: no browser, no network.
 vi.mock('../src/oauth.js', () => ({
   OAUTH_FLOWS: [{ id: 'anthropic', name: 'Anthropic (Claude Pro/Max)' }],
@@ -18,6 +38,7 @@ vi.mock('../src/oauth.js', () => ({
 }));
 import type { App } from '../src/app.js';
 import { runCommand } from '../src/commands.js';
+import { runUpdate } from '../src/update.js';
 import { HOME_DIR } from '../src/config.js';
 import { SessionStore } from '../src/session/store.js';
 
@@ -210,5 +231,116 @@ describe('/login and /logout', () => {
     expect(config.providers.anthropic).toBeUndefined();
     expect(invalidated).toEqual(['x']);
     expect((await runCommand(a, '/logout anthropic')).output).toContain('Nothing saved');
+  });
+});
+
+describe('/update', () => {
+  it('refuses while a task is running', async () => {
+    const busy = { ...app, isBusy: () => true } as unknown as App;
+    const r = await runCommand(busy, '/update');
+    expect(r.output).toMatch(/task is running/);
+    expect(r.restart).toBeUndefined();
+    expect(runUpdate).not.toHaveBeenCalled();
+  });
+
+  it('rejects a version that is not one', async () => {
+    const r = await runCommand(app, '/update abc');
+    expect(r.output).toMatch(/Usage: \/update/);
+    expect(runUpdate).not.toHaveBeenCalled();
+  });
+
+  it('hands the session to a fresh process after a successful install', async () => {
+    vi.mocked(runUpdate).mockImplementationOnce(async (_c, _o, io) => {
+      io.onInstalled?.();
+      io.write('Updated 0.7.29 → 0.7.30.\n');
+      return 0;
+    });
+    const r = await runCommand(app, '/update 0.7.30');
+    expect(r.output).toMatch(/Updated 0\.7\.29 → 0\.7\.30/);
+    expect(r.restart).toBe(true);
+  });
+
+  it('stays put when already up to date', async () => {
+    vi.mocked(runUpdate).mockImplementationOnce(async (_c, _o, io) => {
+      io.write('tessera-code 0.7.30 is up to date (latest release: 0.7.30).\n');
+      return 0;
+    });
+    const r = await runCommand(app, '/update');
+    expect(r.output).toMatch(/up to date/);
+    expect(r.restart).toBeUndefined();
+  });
+
+  it('does not restart when the installer failed', async () => {
+    vi.mocked(runUpdate).mockImplementationOnce(async (_c, _o, io) => {
+      io.write('installer exited 3\n');
+      return 3;
+    });
+    const r = await runCommand(app, '/update');
+    expect(r.output).toMatch(/installer exited 3/);
+    expect(r.restart).toBeUndefined();
+  });
+
+  it('reports an error without restarting', async () => {
+    vi.mocked(runUpdate).mockRejectedValueOnce(new Error('download failed (HTTP 404): …/v9.9.9/install.sh'));
+    const r = await runCommand(app, '/update 9.9.9');
+    expect(r.output).toMatch(/Update failed: download failed \(HTTP 404\)/);
+    expect(r.restart).toBeUndefined();
+  });
+});
+
+describe('/account', () => {
+  const signedIn = {
+    ...app,
+    config: { ...app.config, account: { server: 'http://s', accessToken: 'at', user: { email: 'me@x.y' }, syncedAt: Date.now() - 3_600_000 } },
+  } as unknown as App;
+
+  it('describes both states', async () => {
+    const off = await runCommand(app, '/account');
+    expect(off.output).toMatch(/Not signed in/);
+    expect(off.output).toMatch(/local config\.json only/);
+    const on = await runCommand(signedIn, '/account');
+    expect(on.output).toMatch(/me@x\.y · http:\/\/s/);
+    expect(on.output).toMatch(/Never synced: providers/);
+  });
+
+  it('wants a server that looks like one', async () => {
+    const r = await runCommand(app, '/account login not-a-url');
+    expect(r.output).toMatch(/http\(s\):\/\//);
+    expect(r.output).not.toMatch(/Signed in/);
+  });
+
+  it('signs in and says what to do next', async () => {
+    const r = await runCommand(app, '/account login http://backend.test/');
+    expect(r.output).toMatch(/Signed in as me@x\.y \(http:\/\/backend\.test\)/);
+    expect(r.output).toMatch(/\/account push/);
+  });
+
+  it('pushes the whitelist', async () => {
+    const r = await runCommand(signedIn, '/account push');
+    expect(r.output).toMatch(/Pushed 1 settings to http:\/\/s/);
+    expect(r.output).toMatch(/stay local/);
+  });
+
+  it('pulls, applies the changed keys and shows the backup', async () => {
+    const r = await runCommand(signedIn, '/account pull');
+    expect(r.output).toMatch(/Pulled settings from http:\/\/s/);
+    expect(r.output).toMatch(/Changed: model/);
+    expect(r.output).toMatch(/backup: \/tmp\/config\.json\.bak/);
+    expect(r.output).toMatch(/\/model/);
+  });
+
+  it('logs out', async () => {
+    const r = await runCommand(signedIn, '/account logout');
+    expect(r.output).toMatch(/Signed out on this machine/);
+  });
+
+  it('points push and pull at a login when signed out', async () => {
+    const r = await runCommand(app, '/account push');
+    expect(r.output).toMatch(/Not signed in/);
+  });
+
+  it('shows usage for anything else', async () => {
+    const r = await runCommand(app, '/account nope');
+    expect(r.output).toMatch(/Usage: \/account/);
   });
 });

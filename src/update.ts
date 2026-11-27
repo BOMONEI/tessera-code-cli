@@ -77,6 +77,8 @@ export interface UpdateIo {
   /** Windows only: installs the SHA-verified release tarball through npm. */
   runTarballInstall?: (tarball: string, version: string) => Promise<number>;
   sourceCheckout?: boolean;
+  /** The new version is on disk (a caller that can restart into it, like /update, does so now). */
+  onInstalled?: () => void;
 }
 
 /** Windows: `npm install -g <tgz>` through cmd, its output going straight to the terminal. */
@@ -102,17 +104,27 @@ async function runInstallerScript(script: string, version: string): Promise<numb
 }
 
 /**
- * `tessera-code update [--check]`: compares this version with the latest release and, when newer, runs that
- * release's install.sh (checked against the release's SHA256SUMS) for the new version. Returns the exit code.
+ * `tessera-code update [--check]` and the TUI's `/update`: installs `target`, or without one the latest release —
+ * that release's installer (checked against its SHA256SUMS), pinned to the version. Returns the exit code.
+ * `io.onInstalled` fires once the new version is on disk (a caller that can restart into it does so then).
  */
-export async function runUpdate(current: string, opts: { check?: boolean }, io: UpdateIo): Promise<number> {
+export async function runUpdate(current: string, opts: { check?: boolean; target?: string }, io: UpdateIo): Promise<number> {
   const fetchFn = io.fetch ?? fetch;
-  const latest = await latestVersion(fetchFn);
-  if (compareVersions(latest, current) <= 0) {
-    io.write(`tessera-code ${current} is up to date (latest release: ${latest}).\n`);
+  const requested = opts.target?.trim().replace(/^v/, '');
+  if (requested && !/^\d+\.\d+\.\d+$/.test(requested)) throw new Error(`Not a version: ${opts.target} \u2014 usage: update [version] (e.g. ${current}).`);
+  const goal = requested ?? (await latestVersion(fetchFn));
+  const diff = compareVersions(goal, current);
+  if (diff === 0) {
+    io.write(requested ? `Already on tessera-code ${current}.\n` : `tessera-code ${current} is up to date (latest release: ${goal}).\n`);
     return 0;
   }
-  io.write(`Update available: ${current} → ${latest}\n`);
+  // Without a target, a latest behind this version is nothing to install (a downgrade only happens when asked).
+  if (diff < 0 && !requested) {
+    io.write(`tessera-code ${current} is up to date (latest release: ${goal}).\n`);
+    return 0;
+  }
+  if (diff > 0) io.write(`Update available: ${current} → ${goal}\n`);
+  else io.write(`Downgrading: ${current} → ${goal} (an older release).\n`);
   if (opts.check) {
     io.write('Run `tessera-code update` to install it.\n');
     return 0;
@@ -124,10 +136,10 @@ export async function runUpdate(current: string, opts: { check?: boolean }, io: 
     );
     return 1;
   }
-  const base = `https://github.com/${RELEASE_REPO}/releases/download/v${latest}`;
+  const base = `https://github.com/${RELEASE_REPO}/releases/download/v${goal}`;
   // install.sh is bash-only; on Windows the SHA-verified release tarball is installed through npm instead.
   if (process.platform === 'win32') {
-    const tgzName = `tessera-code-${latest}.tgz`;
+    const tgzName = `tessera-code-${goal}.tgz`;
     const [tgz, sums] = await Promise.all([download(`${base}/${tgzName}`, fetchFn), download(`${base}/SHA256SUMS`, fetchFn)]);
     const expected = expectedSha256(sums, tgzName);
     if (!expected || expected !== createHash('sha256').update(tgz).digest('hex')) {
@@ -137,20 +149,22 @@ export async function runUpdate(current: string, opts: { check?: boolean }, io: 
     const tarball = join(dir, tgzName);
     await writeFile(tarball, tgz);
     try {
-      const code = await (io.runTarballInstall ?? installTarball)(tarball, latest);
+      const code = await (io.runTarballInstall ?? installTarball)(tarball, goal);
       if (code !== 0) return code;
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
-    io.write(`\nUpdated ${current} → ${latest}. The next start shows what changed (or run /changelog).\n`);
+    io.onInstalled?.();
+  io.write(`\nUpdated ${current} → ${goal}. The next start shows what changed (or run /changelog).\n`);
     return 0;
   }
   const [script, sums] = await Promise.all([download(`${base}/install.sh`, fetchFn), download(`${base}/SHA256SUMS`, fetchFn)]);
   const expected = expectedSha256(sums, 'install.sh');
   const actual = createHash('sha256').update(script).digest('hex');
-  if (!expected || expected !== actual) throw new Error(`install.sh of ${latest} does not match its SHA256SUMS; nothing was changed.`);
-  const code = await (io.runInstaller ?? runInstallerScript)(script, latest);
+  if (!expected || expected !== actual) throw new Error(`install.sh of ${goal} does not match its SHA256SUMS; nothing was changed.`);
+  const code = await (io.runInstaller ?? runInstallerScript)(script, goal);
   if (code !== 0) return code;
-  io.write(`\nUpdated ${current} → ${latest}. The next start shows what changed (or run /changelog).\n`);
+  io.onInstalled?.();
+  io.write(`\nUpdated ${current} → ${goal}. The next start shows what changed (or run /changelog).\n`);
   return 0;
 }
