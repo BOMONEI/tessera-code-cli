@@ -93,6 +93,19 @@ describe('refreshDueProviders', () => {
     expect(await refreshDueProviders(fresh, fetchFn)).toBe(false);
     expect(fresh.providers.anthropic!.oauth!.accessToken).toBe('x');
   });
+
+  it('keeps fields a refresh response omits (OpenAI returns no account id)', async () => {
+    const config = {
+      providers: { openai: { oauth: { accessToken: 'old', refreshToken: 'rt', expiresAt: Date.now() + 60_000, accountId: 'acc-1', scope: 'openid' } } },
+    } as unknown as Config;
+    const fetchFn = (async () => new Response(JSON.stringify({ access_token: 'new', refresh_token: 'rt2', expires_in: 3600 }), { status: 200 })) as unknown as typeof fetch;
+    expect(await refreshDueProviders(config, fetchFn)).toBe(true);
+    const t = config.providers.openai!.oauth!;
+    expect(t.accessToken).toBe('new');
+    expect(t.refreshToken).toBe('rt2');
+    expect(t.accountId).toBe('acc-1'); // carried over, not wiped
+    expect(t.scope).toBe('openid');
+  });
 });
 
 describe('forgetProvider', () => {
@@ -163,6 +176,13 @@ describe('OpenAI ChatGPT account id and models', () => {
     expect(r.oauth?.accountId).toBe('acc-jwt');
   });
 
+  it('falls back to a claim inside the access token when neither body nor id_token carries one', async () => {
+    const payload = Buffer.from(JSON.stringify({ 'https://api.openai.com/auth.chatgpt_account_id': 'acc-at' })).toString('base64url');
+    const fetchFn = (async () => new Response(JSON.stringify({ access_token: `h.${payload}.s`, refresh_token: 'ort' }), { status: 200 })) as unknown as typeof fetch;
+    const r = await openaiFlow.exchange('c', 'v', 'http://127.0.0.1:1455/auth/callback', 's', fetchFn);
+    expect(r.oauth?.accountId).toBe('acc-at');
+  });
+
   it('lists the plan\'s model slugs, skipping hidden ones and duplicates', async () => {
     const fetchFn = (async () =>
       new Response(
@@ -171,13 +191,15 @@ describe('OpenAI ChatGPT account id and models', () => {
             { slug: 'gpt-5.4', visibility: 'visible' },
             { slug: 'gpt-5.4-mini', visibility: 'visible' },
             { slug: 'codex-auto-review', visibility: 'hidden' },
+            { slug: 'codex-something', visibility: 'visible' },
+            { slug: 'gpt-internal', visibility: 'hide' },
             { slug: 'gpt-5.4', visibility: 'visible' },
           ],
         }),
         { status: 200 },
       )) as unknown as typeof fetch;
     const slugs = await fetchCodexModels({ accessToken: 't', expiresAt: 0 }, fetchFn);
-    expect(slugs).toEqual(['gpt-5.4', 'gpt-5.4-mini']);
+    expect(slugs).toEqual(['gpt-5.4', 'gpt-5.4-mini']); // hidden/hide and internal codex-* are left out
   });
 
   it('returns undefined when the models endpoint fails', async () => {

@@ -271,6 +271,13 @@ function jwtClaim(token: string | undefined, claim: string): string | undefined 
   }
 }
 
+const CHATGPT_ACCOUNT_CLAIM = 'https://api.openai.com/auth.chatgpt_account_id';
+
+/** The ChatGPT account id: the body, else a JWT claim in the id_token, else one in the access token. */
+function chatgptAccountId(j: { account_id?: string; id_token?: string; access_token?: string }): string | undefined {
+  return j.account_id ?? jwtClaim(j.id_token, CHATGPT_ACCOUNT_CLAIM) ?? jwtClaim(j.id_token, 'account_id') ?? jwtClaim(j.access_token, CHATGPT_ACCOUNT_CLAIM) ?? jwtClaim(j.access_token, 'account_id');
+}
+
 const OPENAI_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'; // Codex CLI's public client (openai/codex)
 const OPENAI_REDIRECT = 'http://127.0.0.1:1455/auth/callback'; // the only registered loopback port+path
 
@@ -306,8 +313,8 @@ export const openaiFlow: OAuthFlow = {
         accessToken: j.access_token,
         refreshToken: j.refresh_token, // single-use rotation: always take the new one
         expiresAt: Date.now() + (j.expires_in ?? 3600) * 1000,
-        // The API needs chatgpt-account-id (403 without it); it lives in the id_token when not in the body.
-        accountId: j.account_id ?? jwtClaim(j.id_token, 'https://api.openai.com/auth.chatgpt_account_id'),
+        // The API needs chatgpt-account-id (401 without it); it lives in a JWT claim when not in the body.
+        accountId: chatgptAccountId(j),
       },
     };
   },
@@ -319,13 +326,13 @@ export const openaiFlow: OAuthFlow = {
       signal: AbortSignal.timeout(30_000),
     });
     if (!r.ok) return undefined;
-    const j = (await r.json()) as { access_token?: string; refresh_token?: string; expires_in?: number; account_id?: string };
+    const j = (await r.json()) as { access_token?: string; refresh_token?: string; expires_in?: number; account_id?: string; id_token?: string };
     if (!j.access_token) return undefined;
     return {
       accessToken: j.access_token,
       refreshToken: j.refresh_token ?? refreshToken,
       expiresAt: Date.now() + (j.expires_in ?? 3600) * 1000,
-      accountId: j.account_id,
+      accountId: chatgptAccountId(j),
     };
   },
 };
@@ -348,7 +355,13 @@ export async function fetchCodexModels(tokens: OAuthTokens, fetchFn: typeof fetc
     });
     if (!r.ok) return undefined;
     const j = (await r.json()) as { models?: Array<{ slug?: string; visibility?: string }> };
-    const slugs = [...new Set((j.models ?? []).filter((m) => m.slug && m.visibility !== 'hidden').map((m) => m.slug!))];
+    const slugs = [
+      ...new Set(
+        (j.models ?? [])
+          .filter((m) => m.slug && m.visibility !== 'hidden' && m.visibility !== 'hide' && !m.slug.startsWith('codex-'))
+          .map((m) => m.slug!),
+      ),
+    ];
     return slugs.length ? slugs : undefined;
   } catch {
     return undefined;
@@ -372,7 +385,8 @@ export async function refreshDueProviders(config: Config, fetchFn: typeof fetch 
     try {
       const next = await flow.refresh(tokens.refreshToken, fetchFn);
       if (!next) continue;
-      settings.oauth = next;
+      // A refresh response can omit fields the first exchange had (OpenAI returns no account id): keep them.
+      settings.oauth = { ...tokens, ...next, accountId: next.accountId ?? tokens.accountId, scope: next.scope ?? tokens.scope };
       changed = true;
     } catch {
       // network or a rejected refresh: try again on the next turn

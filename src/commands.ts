@@ -622,7 +622,11 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
           setProviderSettings(withModels);
         }
       }
-      const saved = result.key ? `Saved the ${flow.name} key to ~/.tessera-code/config.json.` : `Signed in with ${flow.name}. ${oauthStatus(id) ?? ''}`.trim();
+      const noAccount =
+        id === 'openai' && result.oauth && !result.oauth.accountId
+          ? ' ⚠ The sign-in returned no ChatGPT account id — calls to the Codex backend may fail with 401 until it is there. If they do: /logout openai, then /login openai.'
+          : '';
+      const saved = (result.key ? `Saved the ${flow.name} key to ~/.tessera-code/config.json.` : `Signed in with ${flow.name}. ${oauthStatus(id) ?? ''}`.trim()) + noAccount;
       const pick = await providerModelChoose(app, id);
       return { output: saved, ...(pick?.choose ? { choose: pick.choose } : {}) };
     },

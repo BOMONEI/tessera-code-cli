@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.28 — 2026-11-20
+
+### Fixed
+- ChatGPT (Codex) sign-in stored no `accountId` when the token response carried it in neither the body nor the
+  id_token, so every call went out without `chatgpt-account-id` and came back `401 {"detail":"Unauthorized"}`. The
+  account id is now read from the body, the id_token claim and the access-token claim; a sign-in that still has
+  none says so instead of failing later. An automatic renewal also keeps fields the refresh response omits (it
+  returns no account id — it used to wipe the stored one).
+- The model list fetched after a ChatGPT sign-in no longer offers internal slugs (`codex-*`, visibility `hide`).
+
 ## 0.7.27 — 2026-11-20
 
 ### Fixed
