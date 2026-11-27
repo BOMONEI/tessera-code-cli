@@ -17,9 +17,12 @@ vi.mock('../src/account.js', () => ({
   loginAccount: async (server: string) => ({ server, accessToken: 'at', refreshToken: 'rt', expiresAt: Date.now() + 1000, user: { email: 'me@x.y' } }),
   refreshAccount: async (a: unknown) => a,
   pushSettings: async () => {},
-  pullSettings: async () => ({ model: 'm2' }),
+  pullSettings: vi.fn(async (): Promise<Record<string, unknown>> => ({ model: 'm2' })),
   pickSyncable: () => ({ model: 'm2' }),
   applySyncable: () => ['model'],
+  packSecrets: () => ({ v: 1, alg: 'aes-256-gcm', salt: 'c2FsdA==', iv: 'aXY=', ct: 'Y3Q=' }),
+  unpackSecrets: () => ({ providers: { x: { apiKey: 'from-server' } } }),
+  secretsIn: (c: { providers?: Record<string, unknown> }) => Boolean(c.providers && Object.keys(c.providers).length),
   backupConfig: async () => '/tmp/config.json.bak-1',
   saveAccount: async () => {},
   forgetAccount: async () => true,
@@ -37,6 +40,7 @@ vi.mock('../src/oauth.js', () => ({
   },
 }));
 import type { App } from '../src/app.js';
+import { pullSettings } from '../src/account.js';
 import { runCommand } from '../src/commands.js';
 import { runUpdate } from '../src/update.js';
 import { HOME_DIR } from '../src/config.js';
@@ -300,7 +304,7 @@ describe('/account', () => {
     expect(off.output).toMatch(/local config\.json only/);
     const on = await runCommand(signedIn, '/account');
     expect(on.output).toMatch(/me@x\.y · http:\/\/s/);
-    expect(on.output).toMatch(/Never synced: providers/);
+    expect(on.output).toMatch(/Never synced: hooks/);
   });
 
   it('wants a server that looks like one', async () => {
@@ -319,6 +323,34 @@ describe('/account', () => {
     const r = await runCommand(signedIn, '/account push');
     expect(r.output).toMatch(/Pushed 1 settings to http:\/\/s/);
     expect(r.output).toMatch(/stay local/);
+  });
+
+  it('opens the passphrase box when this machine holds secrets', async () => {
+    const withSecrets = { ...signedIn, config: { ...signedIn.config, providers: { x: { apiKey: 'k' } } } } as unknown as App;
+    const r = await runCommand(withSecrets, '/account push');
+    expect(r.output).toMatch(/encrypted before they leave/);
+    expect(r.keyPrompt?.title).toMatch(/Sync passphrase/);
+    const applied = await r.keyPrompt!.run('a-long-passphrase');
+    expect(applied.output).toMatch(/Pushed 1 settings to http:\/\/s/);
+    expect(applied.output).toMatch(/encrypted with your passphrase/);
+  });
+
+  it('refuses a short passphrase without pushing', async () => {
+    const withSecrets = { ...signedIn, config: { ...signedIn.config, providers: { x: { apiKey: 'k' } } } } as unknown as App;
+    const r = await runCommand(withSecrets, '/account push');
+    const applied = await r.keyPrompt!.run('short');
+    expect(applied.output).toMatch(/at least 8 characters/);
+    expect(applied.output).not.toMatch(/Pushed/);
+  });
+
+  it('opens the passphrase box when the server sent encrypted secrets', async () => {
+    vi.mocked(pullSettings).mockResolvedValueOnce({ model: 'm2', secrets: { v: 1 } });
+    const r = await runCommand(signedIn, '/account pull');
+    expect(r.output).toMatch(/encrypted providers and mcp/);
+    expect(r.keyPrompt?.title).toMatch(/Sync passphrase/);
+    const applied = await r.keyPrompt!.run('the-passphrase');
+    expect(applied.output).toMatch(/Pulled settings from http:\/\/s/);
+    expect(applied.output).toMatch(/Changed: model, providers/);
   });
 
   it('pulls, applies the changed keys and shows the backup', async () => {

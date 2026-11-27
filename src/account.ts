@@ -1,6 +1,7 @@
 import { copyFile } from 'node:fs/promises';
+import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'node:crypto';
 import { join } from 'node:path';
-import { HOME_DIR, saveGlobalSetting, type AccountState, type Config } from './config.js';
+import { HOME_DIR, saveGlobalSetting, type AccountState, type Config, type McpServerConfig } from './config.js';
 import { loginFlow, type OAuthFlow } from './oauth.js';
 
 /** The Google OAuth client of the AI Chat backend — a public identifier; its secret stays on the server. */
@@ -9,9 +10,11 @@ export const ACCOUNT_GOOGLE_CLIENT_ID = '367063404195-1hptjtv27p62r39k0pcv9d2i83
 export const ACCOUNT_PORT = 38471;
 
 /**
- * The config keys that travel with the account. Everything else stays on this machine by design: `providers`
- * (API keys and subscription tokens), `mcp` (headers may hold secrets), `hooks` (machine commands),
- * `account` (the tokens themselves). List, not a denylist: a new config key is local until it is added here.
+ * The config keys that travel with the account in the clear: preferences and behavior only. The secrets —
+ * `providers` (API keys and subscription tokens) and `mcpServers` (headers, env tokens) — travel in the `secrets`
+ * field instead, encrypted with a passphrase this machine knows and never sent (packSecrets). `hooks` (machine
+ * commands) and `account` (the sync session's own tokens) never leave the machine at all. List, not a denylist:
+ * a new config key is local until it is added here.
  */
 export const SYNC_KEYS = [
   'model',
@@ -31,6 +34,22 @@ export const SYNC_KEYS = [
   'multiAgent',
   'fallback',
 ] as const;
+
+/** The settings field carrying the encrypted `providers` and `mcpServers` — never the plaintext themselves. */
+export const SECRETS = 'secrets';
+
+/** One stored encrypted payload: AES-256-GCM, the key derived from the passphrase with scrypt. */
+export interface SecretsBlob {
+  v: 1;
+  alg: 'aes-256-gcm';
+  salt: string;
+  iv: string;
+  ct: string;
+}
+
+/** Whether this config holds secrets worth encrypting into a push. */
+export const secretsIn = (config: Config): boolean =>
+  Boolean((config.providers && Object.keys(config.providers).length) || (config.mcpServers && Object.keys(config.mcpServers).length));
 
 export const normalizeServer = (server: string) => server.trim().replace(/\/+$/, '');
 const serverBase = (a: AccountState) => normalizeServer(a.server);
@@ -153,17 +172,55 @@ export async function backupConfig(): Promise<string | undefined> {
   }
 }
 
+const SECRET_SCRYPT = { N: 2 ** 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 } as const;
+
+/**
+ * Encrypts the secret part of the config — providers with their keys and subscription tokens, mcpServers with
+ * their headers and env — into a blob for the server. The passphrase never leaves this machine: only its scrypt
+ * output (a fresh random salt per push) becomes the AES-256-GCM key, so what the server stores is ciphertext it
+ * cannot read.
+ */
+export function packSecrets(config: Config, passphrase: string): SecretsBlob {
+  const plaintext = JSON.stringify({ providers: config.providers ?? {}, mcpServers: config.mcpServers ?? {} });
+  const salt = randomBytes(16);
+  const key = scryptSync(passphrase, salt, 32, SECRET_SCRYPT);
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', key, iv);
+  const ct = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final(), cipher.getAuthTag()]);
+  return { v: 1, alg: 'aes-256-gcm', salt: salt.toString('base64'), iv: iv.toString('base64'), ct: ct.toString('base64') };
+}
+
+/** The inverse; a wrong passphrase or a damaged blob fails the GCM tag check and throws — nothing half-applied. */
+export function unpackSecrets(blob: unknown, passphrase: string): { providers?: Config['providers']; mcpServers?: Config['mcpServers'] } {
+  const b = blob as Partial<SecretsBlob> | null;
+  if (!b || typeof b !== 'object' || b.v !== 1 || b.alg !== 'aes-256-gcm' || typeof b.salt !== 'string' || typeof b.iv !== 'string' || typeof b.ct !== 'string') {
+    throw new Error('The encrypted payload is not in a form this version understands.');
+  }
+  try {
+    const key = scryptSync(passphrase, Buffer.from(b.salt, 'base64'), 32, SECRET_SCRYPT);
+    const data = Buffer.from(b.ct, 'base64');
+    const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(b.iv, 'base64'));
+    decipher.setAuthTag(data.subarray(data.length - 16));
+    const pt = Buffer.concat([decipher.update(data.subarray(0, data.length - 16)), decipher.final()]).toString('utf8');
+    const parsed = JSON.parse(pt) as unknown;
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new Error('bad payload');
+    return parsed as { providers?: Config['providers']; mcpServers?: Config['mcpServers'] };
+  } catch {
+    throw new Error('The passphrase is wrong or the encrypted data was damaged.');
+  }
+}
+
 const unauthorized = (r: Response, what: string): never => {
   if (r.status === 401) throw new Error(`${what} failed: signed out — run /account login again.`);
   throw new Error(`${what} failed (HTTP ${r.status}).`);
 };
 
-/** Sends the whitelist to the server (replaces its stored settings). */
-export async function pushSettings(account: AccountState, config: Config, fetchFn: typeof fetch = fetch): Promise<void> {
+/** Sends the settings to the server (replaces its stored settings). `secrets` is the encrypted providers/mcp blob. */
+export async function pushSettings(account: AccountState, config: Config, opts: { secrets?: unknown } = {}, fetchFn: typeof fetch = fetch): Promise<void> {
   const r = await fetchFn(`${serverBase(account)}/api/settings`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${account.accessToken}` },
-    body: JSON.stringify({ settings: pickSyncable(config) }),
+    body: JSON.stringify({ settings: { ...pickSyncable(config), ...(opts.secrets ? { secrets: opts.secrets } : {}) } }),
     signal: AbortSignal.timeout(30_000),
   });
   if (!r.ok) unauthorized(r, 'Push');

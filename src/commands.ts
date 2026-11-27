@@ -34,11 +34,14 @@ import {
   forgetAccount,
   loginAccount,
   normalizeServer,
+  packSecrets,
   pickSyncable,
   pushSettings,
   pullSettings,
   refreshAccount,
   saveAccount,
+  secretsIn,
+  unpackSecrets,
 } from './account.js';
 
 export interface CommandResult {
@@ -704,10 +707,10 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
         const status = accountStatus(a);
         return {
           output: status
-            ? `Signed in: ${status}\nTravels with the account: ${SYNC_KEYS.join(', ')}\nNever synced: providers (keys), mcp, hooks, tokens.\nCommands: /account push · /account pull · /account logout`
+            ? `Signed in: ${status}\nTravels with the account: ${SYNC_KEYS.join(', ')}, providers and mcp (encrypted with your passphrase)\nNever synced: hooks, account tokens.\nCommands: /account push · /account pull · /account logout`
             : [
                 'Not signed in. /account login <server> binds your settings to your AI Chat account:',
-                '  /account login http://127.0.0.1:8000   (or your deployed domain)',
+                '  /account login https://your-domain   (or http://127.0.0.1:8000 locally)',
                 'Without it everything works exactly as now — local config.json only.',
               ].join('\n'),
         };
@@ -736,15 +739,30 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
       // A session close to expiry renews first (same silent policy as provider tokens).
       const acc = accountRefreshDue(a) ? (await refreshAccount(a)) ?? a : a;
       if (accountRefreshDue(acc)) return { output: 'The session could not be renewed — run /account login again.' };
+      /** The masked passphrase box: the output line explains, the box collects, `run` continues the operation. */
+      const secretBox = (output: string, title: string, run: (secret: string) => Promise<CommandResult>): CommandResult => ({
+        output,
+        keyPrompt: { title, run },
+      });
       if (sub === 'push') {
-        try {
-          await pushSettings(acc, app.config);
-        } catch (e) {
-          return { output: (e as Error).message };
-        }
-        acc.syncedAt = Date.now();
-        await saveAccount(app.config, acc);
-        return { output: `Pushed ${Object.keys(pickSyncable(app.config)).length} settings to ${acc.server} (providers, mcp, hooks and tokens stay local).` };
+        const finish = async (secrets?: unknown): Promise<CommandResult> => {
+          try {
+            await pushSettings(acc, app.config, { secrets });
+          } catch (e) {
+            return { output: (e as Error).message };
+          }
+          acc.syncedAt = Date.now();
+          await saveAccount(app.config, acc);
+          const where = secretsIn(app.config)
+            ? ' — providers and mcp travel encrypted with your passphrase; hooks and account tokens stay local'
+            : ' — hooks and account tokens stay local';
+          return { output: `Pushed ${Object.keys(pickSyncable(app.config)).length} settings to ${acc.server}${where}.` };
+        };
+        if (!secretsIn(app.config)) return finish();
+        return secretBox('Providers and mcp tokens are encrypted before they leave this machine.', 'Sync passphrase (8+ characters)', async (passphrase) => {
+          if (passphrase.length < 8) return { output: 'Use at least 8 characters for the sync passphrase.' };
+          return finish(packSecrets(app.config, passphrase));
+        });
       }
       let incoming: Record<string, unknown>;
       try {
@@ -755,10 +773,35 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
       const backup = await backupConfig();
       const changed = applySyncable(app.config, incoming);
       for (const k of changed) await saveGlobalSetting(k, (app.config as unknown as Record<string, unknown>)[k]);
-      acc.syncedAt = Date.now();
-      await saveAccount(app.config, acc);
-      const note = changed.length ? `Changed: ${changed.join(', ')}${backup ? ` · backup: ${backup}` : ''}\nNew sessions pick these up; the current one keeps its model until /model.` : `Nothing to change${backup ? ` · backup: ${backup}` : ''}.`;
-      return { output: `Pulled settings from ${acc.server}. ${note}` };
+      let warn = '';
+      const done = async (): Promise<CommandResult> => {
+        acc.syncedAt = Date.now();
+        await saveAccount(app.config, acc);
+        const note = changed.length
+          ? `Changed: ${changed.join(', ')}${backup ? ` · backup: ${backup}` : ''}\nNew sessions pick these up; the current one keeps its model until /model.`
+          : `Nothing to change${backup ? ` · backup: ${backup}` : ''}.`;
+        return { output: `Pulled settings from ${acc.server}. ${note}${warn}` };
+      };
+      const blob = incoming.secrets;
+      if (typeof blob === 'object' && blob !== null) {
+        return secretBox('The server sent encrypted providers and mcp.', 'Sync passphrase', async (passphrase) => {
+          try {
+            const unpacked = unpackSecrets(blob, passphrase);
+            for (const k of ['providers', 'mcpServers'] as const) {
+              const v = unpacked[k];
+              if (v && JSON.stringify(app.config[k]) !== JSON.stringify(v)) {
+                app.config[k] = v as never;
+                await saveGlobalSetting(k, v);
+                changed.push(k);
+              }
+            }
+          } catch {
+            warn = ' Encrypted providers/mcp were not applied — the passphrase is wrong or the data was damaged.';
+          }
+          return done();
+        });
+      }
+      return done();
     },
   },
   {

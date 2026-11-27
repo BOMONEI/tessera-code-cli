@@ -238,7 +238,7 @@ export function KeyPrompt({ title, onSubmit, onCancel }: { title: string; onSubm
         {title}
       </Text>
       <Text>
-        {value ? '●'.repeat(value.length) : <Text dimColor>paste the key, then enter (esc cancels)</Text>}
+        {value ? '●'.repeat(value.length) : <Text dimColor>type or paste it, then enter (esc cancels)</Text>}
       </Text>
     </Box>
   );

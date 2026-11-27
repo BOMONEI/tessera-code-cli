@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.7.33 — 2026-11-27
+
+### Added
+- **`/account push` and `/account pull` now carry the secrets too — encrypted.** `providers` (API keys and
+  subscription tokens) and `mcpServers` (headers, env tokens) travel in a `secrets` field as **AES-256-GCM**
+  ciphertext; the key is derived from a sync passphrase with scrypt (a fresh salt every push) and the passphrase
+  never leaves the machine — the server stores only what it cannot read. The transport was already TLS; this closes
+  the storage side. The passphrase is typed into the same masked box as `/auth` (8+ characters, memory only, never
+  written to disk or config), a wrong passphrase or a tampered blob fails the GCM tag check and applies nothing,
+  and a pull merges per provider/server id so machines keep what only they have. `hooks` (machine commands) and the
+  account's own tokens still never leave the machine, and a plaintext `providers` payload from the server is still
+  refused. The KeyPrompt hint reads "type or paste it" now, fitting a passphrase as well as a key.
+
 ## 0.7.32 — 2026-11-27
 
 ### Fixed
