@@ -21,8 +21,9 @@ vi.mock('../src/account.js', () => ({
   pickSyncable: () => ({ model: 'm2' }),
   applySyncable: () => ['model'],
   packSecrets: () => ({ v: 1, alg: 'aes-256-gcm', salt: 'c2FsdA==', iv: 'aXY=', ct: 'Y3Q=' }),
-  unpackSecrets: () => ({ providers: { x: { apiKey: 'from-server' } } }),
+  unpackSecrets: () => ({ apiKey: 'go-key-from-server', providers: { x: { apiKey: 'from-server' } } }),
   secretsIn: (c: { providers?: Record<string, unknown> }) => Boolean(c.providers && Object.keys(c.providers).length),
+  saveApiKey: async () => {},
   backupConfig: async () => '/tmp/config.json.bak-1',
   saveAccount: async () => {},
   forgetAccount: async () => true,
@@ -50,6 +51,7 @@ import { SessionStore } from '../src/session/store.js';
 const app = {
   ctx: { cwd: '/tmp/commands-test' },
   listSkills: async () => [],
+  setApiKey: () => {},
   agent: {
     model: { id: 'mimo-v2.6-flash', format: 'chat', context: 500_000, output: 32_000, reasoning: true, cost: { input: 0, output: 0, cacheRead: 0 } },
     sessionId: 's',
@@ -305,6 +307,7 @@ describe('/account', () => {
     const on = await runCommand(signedIn, '/account');
     expect(on.output).toMatch(/me@x\.y · http:\/\/s/);
     expect(on.output).toMatch(/Never synced: hooks/);
+    expect(on.output).toMatch(/encrypted with your passphrase/);
   });
 
   it('wants a server that looks like one', async () => {
@@ -346,11 +349,11 @@ describe('/account', () => {
   it('opens the passphrase box when the server sent encrypted secrets', async () => {
     vi.mocked(pullSettings).mockResolvedValueOnce({ model: 'm2', secrets: { v: 1 } });
     const r = await runCommand(signedIn, '/account pull');
-    expect(r.output).toMatch(/encrypted providers and mcp/);
+    expect(r.output).toMatch(/encrypted secrets/);
     expect(r.keyPrompt?.title).toMatch(/Sync passphrase/);
     const applied = await r.keyPrompt!.run('the-passphrase');
     expect(applied.output).toMatch(/Pulled settings from http:\/\/s/);
-    expect(applied.output).toMatch(/Changed: model, providers/);
+    expect(applied.output).toMatch(/Changed: model, apiKey, providers/);
   });
 
   it('pulls, applies the changed keys and shows the backup', async () => {

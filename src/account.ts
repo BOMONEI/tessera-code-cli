@@ -11,10 +11,10 @@ export const ACCOUNT_PORT = 38471;
 
 /**
  * The config keys that travel with the account in the clear: preferences and behavior only. The secrets —
- * `providers` (API keys and subscription tokens) and `mcpServers` (headers, env tokens) — travel in the `secrets`
- * field instead, encrypted with a passphrase this machine knows and never sent (packSecrets). `hooks` (machine
- * commands) and `account` (the sync session's own tokens) never leave the machine at all. List, not a denylist:
- * a new config key is local until it is added here.
+ * `providers` (API keys and subscription tokens), `mcpServers` (headers, env tokens) and the account's own
+ * tokens — travel in the `secrets` field instead, encrypted with a passphrase this machine knows and never sent
+ * (packSecrets). `hooks` (machine commands) never leave the machine: they run commands on it. List, not a
+ * denylist: a new config key is local until it is added here.
  */
 export const SYNC_KEYS = [
   'model',
@@ -175,13 +175,18 @@ export async function backupConfig(): Promise<string | undefined> {
 const SECRET_SCRYPT = { N: 2 ** 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 } as const;
 
 /**
- * Encrypts the secret part of the config — providers with their keys and subscription tokens, mcpServers with
- * their headers and env — into a blob for the server. The passphrase never leaves this machine: only its scrypt
- * output (a fresh random salt per push) becomes the AES-256-GCM key, so what the server stores is ciphertext it
- * cannot read.
+ * Encrypts every secret of the config — the OpenCode Go `apiKey`, `providers` with their keys and subscription
+ * tokens, `mcpServers` with their headers and env, and the account's own tokens — into a blob for the server.
+ * The passphrase never leaves this machine: only its scrypt output (a fresh random salt per push) becomes the
+ * AES-256-GCM key, so what the server stores is ciphertext it cannot read.
  */
 export function packSecrets(config: Config, passphrase: string): SecretsBlob {
-  const plaintext = JSON.stringify({ providers: config.providers ?? {}, mcpServers: config.mcpServers ?? {} });
+  const plaintext = JSON.stringify({
+    apiKey: (config as unknown as { apiKey?: string }).apiKey,
+    providers: config.providers ?? {},
+    mcpServers: config.mcpServers ?? {},
+    account: config.account,
+  });
   const salt = randomBytes(16);
   const key = scryptSync(passphrase, salt, 32, SECRET_SCRYPT);
   const iv = randomBytes(12);
@@ -191,7 +196,10 @@ export function packSecrets(config: Config, passphrase: string): SecretsBlob {
 }
 
 /** The inverse; a wrong passphrase or a damaged blob fails the GCM tag check and throws — nothing half-applied. */
-export function unpackSecrets(blob: unknown, passphrase: string): { providers?: Config['providers']; mcpServers?: Config['mcpServers'] } {
+export function unpackSecrets(
+  blob: unknown,
+  passphrase: string,
+): { apiKey?: string; providers?: Config['providers']; mcpServers?: Config['mcpServers']; account?: Config['account'] } {
   const b = blob as Partial<SecretsBlob> | null;
   if (!b || typeof b !== 'object' || b.v !== 1 || b.alg !== 'aes-256-gcm' || typeof b.salt !== 'string' || typeof b.iv !== 'string' || typeof b.ct !== 'string') {
     throw new Error('The encrypted payload is not in a form this version understands.');
@@ -204,7 +212,7 @@ export function unpackSecrets(blob: unknown, passphrase: string): { providers?: 
     const pt = Buffer.concat([decipher.update(data.subarray(0, data.length - 16)), decipher.final()]).toString('utf8');
     const parsed = JSON.parse(pt) as unknown;
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new Error('bad payload');
-    return parsed as { providers?: Config['providers']; mcpServers?: Config['mcpServers'] };
+    return parsed as { apiKey?: string; providers?: Config['providers']; mcpServers?: Config['mcpServers']; account?: Config['account'] };
   } catch {
     throw new Error('The passphrase is wrong or the encrypted data was damaged.');
   }

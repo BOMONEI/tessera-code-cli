@@ -130,19 +130,26 @@ describe('the settings whitelist', () => {
 });
 
 describe('the encrypted secrets channel', () => {
-  const expected = { providers: { x: { apiKey: 'k' } }, mcpServers: { a: { url: 'http://m' } } };
+  const expected = {
+    apiKey: undefined,
+    providers: { x: { apiKey: 'k' } },
+    mcpServers: { a: { url: 'http://m' } },
+    account: { server: 's', accessToken: 't' },
+  };
 
-  it('round-trips providers and mcp through a passphrase, with a fresh salt each push', () => {
-    const config = cfg();
+  it('round-trips every secret of the config through a passphrase, with a fresh salt each push', () => {
+    const config = cfg({ apiKey: 'go-key-123' });
     const blob = packSecrets(config, 'correct horse battery');
     expect(blob.v).toBe(1);
     expect(blob.alg).toBe('aes-256-gcm');
     // The stored blob is ciphertext: neither the secrets, nor the passphrase, nor any key material sits in it.
     const stored = JSON.stringify(blob);
+    expect(stored).not.toContain('go-key-123');
     expect(stored).not.toContain('"apiKey"');
     expect(stored).not.toContain('http://m');
+    expect(stored).not.toContain('accessT'); // the account token field name never appears in clear
     expect(stored).not.toContain('correct horse battery');
-    expect(unpackSecrets(blob, 'correct horse battery')).toEqual(expected);
+    expect(unpackSecrets(blob, 'correct horse battery')).toEqual({ ...expected, apiKey: 'go-key-123' });
     expect(JSON.stringify(packSecrets(config, 'correct horse battery'))).not.toBe(stored); // fresh salt/iv
     // The whitelist that travels in the clear never grows a secret.
     expect(pickSyncable(config)).toEqual({ model: 'm', thinking: true });
@@ -168,12 +175,14 @@ describe('the encrypted secrets channel', () => {
     const acc = { server: 'http://s', accessToken: 'tok' };
     await pushSettings(acc, cfg(), {}, fetchFn);
     expect(JSON.parse(bodies[0]!)).toEqual({ settings: { model: 'm', thinking: true } });
-    await pushSettings(acc, cfg(), { secrets: packSecrets(cfg(), 'pw-123456') }, fetchFn);
+    await pushSettings(acc, cfg({ apiKey: 'go-key-456' }), { secrets: packSecrets(cfg({ apiKey: 'go-key-456' }), 'pw-123456') }, fetchFn);
     const settings = JSON.parse(bodies[1]!).settings as Record<string, unknown>;
     expect(settings.secrets).toMatchObject({ v: 1, alg: 'aes-256-gcm' });
     expect(settings.providers).toBeUndefined();
     expect(settings.mcpServers).toBeUndefined();
+    expect(settings.account).toBeUndefined();
     expect(bodies[1]).not.toContain('"apiKey"');
+    expect(bodies[1]).not.toContain('go-key-456');
   });
 });
 

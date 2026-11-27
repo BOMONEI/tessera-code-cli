@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.34 — 2026-11-27
+
+### Changed
+- **The encrypted `secrets` payload now holds every secret in `config.json`**, not just providers and mcp: the
+  OpenCode Go `apiKey` and the **account's own session tokens** ride along too — so a pulled machine is signed in
+  and usable without retyping anything. `hooks` stays the single exception (machine-specific commands). A pull
+  reports exactly what it applied (`Changed: model, apiKey, providers, mcpServers, account`), and everything in the
+  blob remains AES-256-GCM ciphertext on the server; the passphrase never leaves the machine.
+
 ## 0.7.33 — 2026-11-27
 
 ### Added
