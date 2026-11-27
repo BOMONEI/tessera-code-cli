@@ -143,6 +143,17 @@ export function backspaceTarget(chunks: PasteChunk[], value: string, at: number)
 }
 
 /**
+ * What one pasted text adds as a run: nothing when it went in as typed — a short paste, plain text, removed a
+ * character at a time — and the inserted range when it was rewritten: a collapsed long paste or dropped image
+ * paths, both of which carry a marker that one backspace removes whole. The criterion is the rewrite itself, so
+ * newline/tab normalization on the way in never makes a short paste look like a long one.
+ */
+export function pasteRun(original: string, transformed: string, at: number, inserted: number): PasteChunk | undefined {
+  if (transformed === original || inserted <= 0) return undefined;
+  return { start: at, end: at + inserted };
+}
+
+/**
  * Colored spans over [from, to): yellow for a collapsed long paste, magenta for images — short pastes are ordinary
  * text and draw in the default color. A marker keeps
  * its own color where it sits inside a run (the run's span is cut around it); the result is sorted and disjoint.
@@ -278,15 +289,14 @@ export function Input({
   usePaste(
     (text) => {
       const { value, at } = withoutSelection();
-      const clean = (transformPaste?.(text) ?? text).replace(/\r\n?/g, '\n').replace(/\t/g, '  ');
-      // A short paste stays exactly what typing makes: plain text, no run, no color, removed a character at a time.
-      // transformPaste only rewrites long pastes (the placeholder) and dropped image paths — those are runs.
-      if (transformPaste && clean !== text) {
-        change(value.slice(0, at) + clean + value.slice(at), at + clean.length);
-        chunksRef.current = [...chunksRef.current, { start: at, end: at + clean.length }].sort((a, b) => a.start - b.start);
-        return;
-      }
+      const transformed = transformPaste?.(text) ?? text;
+      const clean = transformed.replace(/\r\n?/g, '\n').replace(/\t/g, '  ');
       change(value.slice(0, at) + clean + value.slice(at), at + clean.length);
+      // Only a rewritten paste (the collapsed-long-paste placeholder or dropped image paths — both carry a
+      // marker) is a run: colored, one backspace whole. A short paste goes in as typed even when CRLF or tabs
+      // were normalized on the way in — plain text, a character at a time.
+      const run = pasteRun(text, transformed, at, clean.length);
+      if (run) chunksRef.current = [...chunksRef.current, run].sort((a, b) => a.start - b.start);
     },
     { isActive: focus },
   );
@@ -406,11 +416,10 @@ export function Input({
       before += segments.at(-1)!;
       if (submitted && !before && !after) return;
       change(before + after, before.length);
-      // One burst of keys without bracketed paste (dropped files, a long paste → placeholder) is a run too — but a
-      // burst transformPaste left alone was fast typing, not a paste.
-      if (asPaste && !submitted && !sel && burst !== keys && before.length > at) {
-        chunksRef.current = [...chunksRef.current, { start: at, end: before.length }].sort((a, b) => a.start - b.start);
-      }
+      // One burst of keys without bracketed paste (dropped files, a long paste → placeholder) is a run too — the
+      // same criterion: only when transformPaste rewrote it (a burst left alone was fast typing, not a paste).
+      const burstRun = !submitted && !sel ? pasteRun(keys, burst, at, before.length - at) : undefined;
+      if (burstRun) chunksRef.current = [...chunksRef.current, burstRun].sort((a, b) => a.start - b.start);
     },
     { isActive: focus },
   );

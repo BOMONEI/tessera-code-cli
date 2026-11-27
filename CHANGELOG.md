@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.32 — 2026-11-27
+
+### Fixed
+- One criterion decides what a paste is: **only a paste transformPaste rewrote** — the collapsed long-paste
+  placeholder or dropped image paths, both carrying a marker — becomes a run (colored, one backspace whole).
+  A short paste goes in exactly as typed — plain text, a character at a time — and newline/tab normalization on
+  the way in (CRLF line endings, tabs) no longer makes it look like a long one: it used to be recorded as a run,
+  so a short paste with Windows line endings was removed whole.
+
 ## 0.7.31 — 2026-11-27
 
 ### Fixed

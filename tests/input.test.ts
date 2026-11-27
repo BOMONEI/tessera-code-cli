@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import stringWidth from 'string-width';
-import { adjustChunks, backspaceTarget, caretOf, pasteSpans, wrapOffsets } from '../src/ui/tui/Input.js';
+import { adjustChunks, backspaceTarget, caretOf, pasteRun, pasteSpans, wrapOffsets } from '../src/ui/tui/Input.js';
 import { mentionAt } from '../src/ui/completion.js';
 
 describe('caretOf (real cursor position for IME composition)', () => {
@@ -79,6 +79,24 @@ describe('pasted runs (only rewritten pastes are runs)', () => {
   it('a value set from outside moves runs the same way', () => {
     // An image tag inserted in front (ctrl+v) shifts everything after the caret.
     expect(adjustChunks([{ start: 0, end: 5 }], 'hello', '[Image #1] hello')).toEqual([{ start: 11, end: 16 }]);
+  });
+});
+
+describe('pasteRun (only a rewritten paste becomes a run)', () => {
+  it('leaves a short paste alone — as typed, even when CRLF or tabs were normalized', () => {
+    expect(pasteRun('hello', 'hello', 0, 5)).toBeUndefined();
+    // The rewrite returned the text unchanged; the CRLF→LF normalization happens after this check.
+    expect(pasteRun('a\r\nb', 'a\r\nb', 0, 4)).toBeUndefined();
+    expect(pasteRun('a\tb', 'a\tb', 0, 4)).toBeUndefined();
+  });
+
+  it('takes the inserted range for a collapsed long paste or dropped image paths', () => {
+    expect(pasteRun('x'.repeat(9999), '[Pasted text #1 +99 lines] ', 3, 27)).toEqual({ start: 3, end: 30 });
+    expect(pasteRun('/Users/me/shot.png', '[Image #1] ', 5, 11)).toEqual({ start: 5, end: 16 });
+  });
+
+  it('is nothing when nothing went in', () => {
+    expect(pasteRun('a', 'b', 0, 0)).toBeUndefined();
   });
 });
 
