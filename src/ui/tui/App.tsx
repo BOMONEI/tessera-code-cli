@@ -100,6 +100,8 @@ const PASTE_COLLAPSE_LINES = 5;
 const PASTE_COLLAPSE_CHARS = 1_500;
 /** Subagent lines shown under the spinner before "… N more". */
 const MAX_SUBAGENT_ROWS = 6;
+/** Subagent plumbing: the bottom panel shows its progress, so these tools never draw a line in the conversation. */
+const HIDDEN_TOOLS = new Set(['task', 'tasks', 'tail']);
 
 /** HUD counts for the MCP indicator: connected out of configured, and whether any are still starting. */
 export function mcpCounts(status: ReadonlyArray<{ ok: boolean; error?: string }>): { ok: number; total: number; connecting: boolean } {
@@ -702,23 +704,28 @@ export function TuiApp({
             case 'tool-call': {
               flushReasoning();
               flushStream();
+              setStatus(`Running ${toolLabel(ev.name, ev.input)}`);
+              // Subagent plumbing stays out of the conversation — the bottom panel shows its progress.
+              if (HIDDEN_TOOLS.has(ev.name)) break;
               labels.set(ev.id, { label: toolLabel(ev.name, ev.input), fullLabel: toolLabelFull(ev.name, ev.input) });
               // The tool line goes into the conversation right away with a blinking dot; the result fills it in later.
               const itemId = push({ kind: 'tool', ...labels.get(ev.id), running: true, rev: 0 } as NewHistoryItem);
               runningToolItems.current.set(ev.id, itemId);
-              setStatus(`Running ${toolLabel(ev.name, ev.input)}`);
               break;
             }
             case 'tool-result': {
+              const hidden = HIDDEN_TOOLS.has(ev.name);
               const itemId = runningToolItems.current.get(ev.id);
               runningToolItems.current.delete(ev.id);
-              if (itemId === undefined) push({ kind: 'tool', label: ev.name, ...labels.get(ev.id), output: outputText(ev.output), isError: ev.isError });
-              else
-                setItems((prev) =>
-                  prev.map((it) =>
-                    it.id === itemId && it.kind === 'tool' ? { ...it, output: outputText(ev.output), isError: ev.isError, running: false, rev: (it.rev ?? 0) + 1 } : it,
-                  ),
-                );
+              if (!hidden) {
+                if (itemId === undefined) push({ kind: 'tool', label: ev.name, ...labels.get(ev.id), output: outputText(ev.output), isError: ev.isError });
+                else
+                  setItems((prev) =>
+                    prev.map((it) =>
+                      it.id === itemId && it.kind === 'tool' ? { ...it, output: outputText(ev.output), isError: ev.isError, running: false, rev: (it.rev ?? 0) + 1 } : it,
+                    ),
+                  );
+              }
               for (const d of pendingDiffs.current.splice(0)) push({ kind: 'diff', ...d });
               setStatus('Thinking');
               break;

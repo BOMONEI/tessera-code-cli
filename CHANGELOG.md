@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.29 — 2026-11-20
+
+### Changed
+- The `task`, `tasks` and `tail` tool calls no longer draw a line in the conversation: subagent plumbing stays out
+  of the chat and the bottom panel shows its progress, as before. The report-arrival note, the auto-continue note
+  and the status line are unchanged.
+
 ## 0.7.28 — 2026-11-20
 
 ### Fixed
